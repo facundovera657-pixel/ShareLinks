@@ -4,6 +4,6 @@
   "version": "1.0.0",
   "description": "ShareLinks — pasa links al celular sin WhatsApp",
   "dependencies": {
-    "@vercel/blob": "^1.0.0"
+    "@vercel/blob": "^2.3.0"
   }
 }
