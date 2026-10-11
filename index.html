@@ -127,25 +127,24 @@ const lsLinksKey = (id) => "sl_links_" + (id || "local");
 const loadLocal = (id) => { try { return JSON.parse(localStorage.getItem(lsLinksKey(id)) || "[]"); } catch { return []; } };
 const saveLocal = (id, links) => { try { localStorage.setItem(lsLinksKey(id), JSON.stringify(links)); } catch {} };
 
-/* ===== Nube: jsonblob.com (sin cuentas, solo ID) ===== */
-const API = "https://jsonblob.com/api/jsonBlob";
+/* ===== Nube: API propia en Vercel (sin cuentas, solo ID) ===== */
+const API = "/api/space";
 async function cloudCreate(links) {
   const r = await fetch(API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ links }) });
   if (!r.ok) throw new Error("No se pudo crear (HTTP " + r.status + ")");
-  const loc = r.headers.get("Location") || r.headers.get("location") || "";
-  const id = loc.split("/").pop() || (await r.json().catch(() => ({}))).id;
-  if (!id) throw new Error("Respuesta sin ID");
-  return id;
+  const d = await r.json().catch(() => ({}));
+  if (!d.id) throw new Error("Respuesta sin ID");
+  return d.id;
 }
 async function cloudGet(id) {
-  const r = await fetch(API + "/" + encodeURIComponent(id));
+  const r = await fetch(API + "?id=" + encodeURIComponent(id));
   if (r.status === 404) throw new Error("Ese ID no existe. Revísalo o crea un espacio nuevo.");
   if (!r.ok) throw new Error("No se pudo leer (HTTP " + r.status + ")");
   const data = await r.json();
   return Array.isArray(data) ? data : (data.links || []);
 }
 async function cloudPut(id, links) {
-  const r = await fetch(API + "/" + encodeURIComponent(id), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ links }) });
+  const r = await fetch(API + "?id=" + encodeURIComponent(id), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ links }) });
   if (!r.ok) throw new Error("No se pudo guardar en la nube (HTTP " + r.status + ")");
 }
 
