@@ -202,6 +202,34 @@ function toast(msg) {
   const t = $("toast"); t.textContent = msg; t.classList.add("show");
   clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 2200);
 }
+function flashBtn(btn, label) {
+  const old = btn.textContent;
+  btn.textContent = label || "¡Copiado ✓"; btn.disabled = true;
+  setTimeout(() => { btn.textContent = old; btn.disabled = false; }, 1200);
+}
+// Copiado robusto: API moderna → textarea+execCommand (webviews/viejos) → false
+async function copyText(text) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {}
+  try {
+    const ta = document.createElement("textarea");
+    ta.value = text;
+    ta.setAttribute("readonly", "");
+    ta.style.cssText = "position:fixed;top:0;left:0;opacity:0;pointer-events:none";
+    document.body.appendChild(ta);
+    ta.focus({ preventScroll: true });
+    ta.select();
+    try { ta.setSelectionRange(0, ta.value.length); } catch {}
+    const ok = document.execCommand("copy");
+    ta.remove();
+    if (ok) return true;
+  } catch {}
+  return false;
+}
 function setStatus(el, msg, cls) { el.textContent = msg || ""; el.className = "status" + (cls ? " " + cls : ""); }
 function domainOf(u) { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return u; } }
 function fmtDate(ts) { try { return new Date(ts).toLocaleString("es", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }); } catch { return ""; } }
@@ -316,9 +344,9 @@ $("btnJoin").onclick = async () => {
 $("inId").addEventListener("keydown", e => { if (e.key === "Enter") $("btnJoin").click(); });
 $("btnSync").onclick = pull;
 $("btnExit").onclick = () => exitToLocal("Saliste del espacio. Estás en modo local.", "");
-$("btnCopyId").onclick = async () => {
-  try { await navigator.clipboard.writeText(spaceId); toast("ID copiado ✓"); }
-  catch { toast("ID: " + spaceId); }
+$("btnCopyId").onclick = async (e) => {
+  if (await copyText(spaceId)) { toast("ID copiado ✓"); flashBtn(e.target.closest("button")); }
+  else prompt("Copia tu ID:", spaceId);
 };
 
 list.onclick = async (e) => {
@@ -333,15 +361,13 @@ list.onclick = async (e) => {
   }
   if (act === "open") window.open(item.url, "_blank", "noopener");
   if (act === "copy") {
-    try { await navigator.clipboard.writeText(item.url); toast("Link copiado ✓"); }
-    catch { prompt("Copia tu link:", item.url); }
+    if (await copyText(item.url)) { toast("Link copiado ✓"); flashBtn(btn); }
+    else prompt("Copia tu link:", item.url);
   }
   if (act === "share") {
     if (navigator.share) { try { await navigator.share({ title: "ShareLinks", url: item.url }); } catch {} }
-    else {
-      try { await navigator.clipboard.writeText(item.url); toast("Tu celu no tiene Compartir: link copiado ✓"); }
-      catch { prompt("Copia tu link:", item.url); }
-    }
+    else if (await copyText(item.url)) { toast("Tu celu no tiene Compartir: link copiado ✓"); flashBtn(btn); }
+    else prompt("Copia tu link:", item.url);
   }
 };
 

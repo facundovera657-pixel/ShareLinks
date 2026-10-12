@@ -275,6 +275,8 @@ describe("frontend y PWA", () => {
     assert.match(html, /enterkeyhint="go"/);
     assert.match(html, /enterkeyhint="send"/);
     assert.equal((html.match(/addEventListener\("keydown"/g) || []).length, 2); // Enter en ID y en URL
+    assert.match(html, /execCommand\("copy"\)/); // fallback de copiado
+    assert.match(html, /copyText\(item\.url\)/);
     assert.doesNotMatch(html, /qrserver/);
   });
 
