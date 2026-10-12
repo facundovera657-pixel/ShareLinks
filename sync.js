@@ -63,6 +63,7 @@ var MAX_URL_LEN = 2048;
 function normUrl(u) {
   u = String(u == null ? "" : u).replace(/[\p{Cf}]/gu, "").trim().split(/\s/, 1)[0] || "";
   if (!u) return "";
+  if (/^[a-z][a-z0-9+.-]*:/i.test(u) && !/^https?:\/\//i.test(u)) return ""; // esquema no-http (file:, ftp:, javascript:, …)
   if (!/^https?:\/\//i.test(u)) u = "https://" + u;
   if (u.length > MAX_URL_LEN) return "";
   try {
