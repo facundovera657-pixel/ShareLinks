@@ -14,6 +14,7 @@
 <link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png" />
 <script src="/vendor/qrcode.min.js"></script>
+<script src="/sync.js"></script>
 <style>
   :root{
     --bg:#0f1115; --card:#171b22; --card2:#1e242e; --txt:#f2f4f8; --mut:#9aa4b2;
@@ -92,7 +93,7 @@
     <h2>1 · Tu espacio (ID)</h2>
     <div id="noSpace">
       <label for="inId">Entrar con un ID existente</label>
-      <input id="inId" placeholder="Ej: a3f9c2…" autocomplete="off" maxlength="64" />
+      <input id="inId" placeholder="Ej: a3f9c2…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="64" />
       <div class="row2" style="margin-top:10px">
         <button class="ghost" id="btnJoin">Entrar</button>
         <button class="btn" id="btnCreate">Crear mi espacio</button>
@@ -118,7 +119,7 @@
   <section class="card">
     <h2>2 · Guardar link</h2>
     <label for="inUrl">Pega el link</label>
-    <input id="inUrl" placeholder="https://…" inputmode="url" autocomplete="off" />
+    <input id="inUrl" placeholder="https://…" inputmode="url" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
     <div class="row"><button class="btn" id="btnAdd">＋ Guardar</button></div>
     <div class="status" id="addStatus"></div>
   </section>
@@ -140,16 +141,27 @@
 
 <script>
 "use strict";
-/* ===== Storage local ===== */
+/* ===== Storage local (migra formato viejo: array → {links, tombstones}) ===== */
 const LS_ID = "sl_space_id";
 const lsLinksKey = (id) => "sl_links_" + (id || "local");
-const loadLocal = (id) => { try { return JSON.parse(localStorage.getItem(lsLinksKey(id)) || "[]"); } catch { return []; } };
-const saveLocal = (id, links) => { try { localStorage.setItem(lsLinksKey(id), JSON.stringify(links)); } catch {} };
+const loadStore = (id) => {
+  try {
+    const raw = JSON.parse(localStorage.getItem(lsLinksKey(id)) || "null");
+    if (!raw) return { links: [], tombstones: {} };
+    if (Array.isArray(raw)) return { links: raw, tombstones: {} };
+    return {
+      links: Array.isArray(raw.links) ? raw.links : [],
+      tombstones: raw.tombstones && typeof raw.tombstones === "object" ? raw.tombstones : {},
+    };
+  } catch { return { links: [], tombstones: {} }; }
+};
+const saveStore = (id, store) => { try { localStorage.setItem(lsLinksKey(id), JSON.stringify(store)); } catch {} };
 
 /* ===== Nube: API propia en Vercel (sin cuentas, solo ID) ===== */
 const API = "/api/space";
-async function cloudCreate(links) {
-  const r = await fetch(API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ links }) });
+const NOT_FOUND_RE = /no existe/i;
+async function cloudCreate(store) {
+  const r = await fetch(API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(store) });
   if (!r.ok) throw new Error("No se pudo crear (HTTP " + r.status + ")");
   const d = await r.json().catch(() => ({}));
   if (!d.id) throw new Error("Respuesta sin ID");
@@ -157,13 +169,18 @@ async function cloudCreate(links) {
 }
 async function cloudGet(id) {
   const r = await fetch(API + "?id=" + encodeURIComponent(id));
-  if (r.status === 404) throw new Error("Ese ID no existe. Revísalo o crea un espacio nuevo.");
+  if (r.status === 404) throw new Error("Ese ID no existe. Revisá mayúsculas y minúsculas, o creá un espacio nuevo.");
   if (!r.ok) throw new Error("No se pudo leer (HTTP " + r.status + ")");
   const data = await r.json();
-  return Array.isArray(data) ? data : (data.links || []);
+  if (Array.isArray(data)) return { links: data, tombstones: {} };
+  return {
+    links: Array.isArray(data.links) ? data.links : [],
+    tombstones: data.tombstones && typeof data.tombstones === "object" ? data.tombstones : {},
+  };
 }
-async function cloudPut(id, links) {
-  const r = await fetch(API + "?id=" + encodeURIComponent(id), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ links }) });
+async function cloudPut(id, store) {
+  const r = await fetch(API + "?id=" + encodeURIComponent(id), { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(store) });
+  if (r.status === 404) throw new Error("Ese ID no existe. Revisá mayúsculas y minúsculas, o creá un espacio nuevo.");
   if (!r.ok) throw new Error("No se pudo guardar en la nube (HTTP " + r.status + ")");
 }
 
@@ -173,7 +190,7 @@ if (new URLSearchParams(location.hash.slice(1)).get("id")) {
   localStorage.setItem(LS_ID, spaceId);
   history.replaceState(null, "", location.pathname + location.search);
 }
-let links = loadLocal(spaceId || null);
+let store = loadStore(spaceId || null);
 let pushT = null;
 let lastQrId = "";
 
@@ -197,6 +214,7 @@ function fmtDate(ts) { try { return new Date(ts).toLocaleString("es", { day: "2-
 
 /* ===== Render ===== */
 function render() {
+  const links = store.links;
   count.textContent = links.length;
   empty.style.display = links.length ? "none" : "block";
   const sorted = [...links].sort((a, b) => b.ts - a.ts);
@@ -240,35 +258,46 @@ function renderSpace() {
 
 /* ===== Sync ===== */
 function schedulePush() {
-  saveLocal(spaceId || null, links);
+  saveStore(spaceId || null, store);
   if (!spaceId) return;
   clearTimeout(pushT);
   pushT = setTimeout(async () => {
-    try { await cloudPut(spaceId, links); setStatus(spaceStatus, "Guardado en la nube ✓", "ok"); }
+    try { await cloudPut(spaceId, store); setStatus(spaceStatus, "Guardado en la nube ✓", "ok"); }
     catch (e) { setStatus(spaceStatus, "Guardado local. Nube: " + e.message, "err"); }
   }, 800);
+}
+function exitToLocal(msg, cls) {
+  saveStore(spaceId, store);
+  spaceId = ""; localStorage.removeItem(LS_ID);
+  store = loadStore(null); render();
+  setStatus(spaceStatus, msg, cls === undefined ? "err" : cls);
 }
 async function pull() {
   if (!spaceId) return;
   setStatus(spaceStatus, "Sincronizando…");
   try {
     const cloud = await cloudGet(spaceId);
-    // fusión simple: une por id, gana el más reciente
-    const map = new Map(links.map(l => [l.id, l]));
-    for (const c of cloud) { const p = map.get(c.id); if (!p || (c.ts > p.ts)) map.set(c.id, c); }
-    links = [...map.values()];
-    saveLocal(spaceId, links); render();
-    setStatus(spaceStatus, "Sincronizado ✓ · " + links.length + " links", "ok");
-  } catch (e) { setStatus(spaceStatus, e.message, "err"); }
+    const merged = mergeStores(store, cloud);
+    const changed = !sameStore(merged, cloud);
+    store = merged;
+    saveStore(spaceId, store); render();
+    if (changed) schedulePush(); // converge borrados y fusiones en la nube
+    else setStatus(spaceStatus, "Sincronizado ✓ · " + store.links.length + " links", "ok");
+  } catch (e) {
+    if (e && NOT_FOUND_RE.test(e.message || "")) {
+      // el espacio no existe: salir para no quedar trabado en el error
+      exitToLocal(e.message + " Quedaste en modo local.");
+    } else setStatus(spaceStatus, e.message, "err");
+  }
 }
 
 /* ===== Acciones ===== */
 $("btnAdd").onclick = async () => {
   const url = normUrl($("inUrl").value);
   if (!url) { setStatus(addStatus, "Pega un link válido, ej: https://ejemplo.com", "err"); return; }
-  links.push({ id: "l" + Date.now().toString(36) + Math.floor(Math.random() * 999), url, ts: Date.now() });
+  store.links.push({ id: "l" + Date.now().toString(36) + Math.floor(Math.random() * 999), url, ts: Date.now() });
   $("inUrl").value = ""; setStatus(addStatus, "");
-  saveLocal(spaceId || null, links); render(); schedulePush();
+  saveStore(spaceId || null, store); render(); schedulePush();
   toast("Link guardado ✓");
 };
 $("inUrl").addEventListener("keydown", e => { if (e.key === "Enter") $("btnAdd").click(); });
@@ -276,29 +305,22 @@ $("inUrl").addEventListener("keydown", e => { if (e.key === "Enter") $("btnAdd")
 $("btnCreate").onclick = async () => {
   setStatus(spaceStatus, "Creando tu espacio…");
   try {
-    const id = await cloudCreate(links.length ? links : []);
-    // si había links locales sin espacio, súbelos
-    if (links.length) { try { await cloudPut(id, links); } catch {} }
+    const id = await cloudCreate(store);
     spaceId = id; localStorage.setItem(LS_ID, id);
-    saveLocal(id, links); render();
+    saveStore(id, store); render();
     setStatus(spaceStatus, "Espacio creado ✓. Usa este ID en tu celular.", "ok");
-    toast("Espacio creado. ID copiado abajo ✓");
+    toast("Espacio creado ✓");
   } catch (e) { setStatus(spaceStatus, "Sin conexión: " + e.message + ". Sigues en modo local.", "err"); }
 };
 $("btnJoin").onclick = async () => {
-  const id = $("inId").value.trim();
+  const id = $("inId").value.replace(/\s+/g, ""); // el teclado del celu agrega espacios/mayúsculas
   if (!id) { setStatus(spaceStatus, "Escribe tu ID primero.", "err"); return; }
   spaceId = id; localStorage.setItem(LS_ID, id);
-  links = loadLocal(id); render();
-  await pull();
+  store = loadStore(id); render();
+  await pull(); // si el ID no existe, pull sale solo a modo local con aviso
 };
 $("btnSync").onclick = pull;
-$("btnExit").onclick = () => {
-  saveLocal(spaceId, links);
-  spaceId = ""; localStorage.removeItem(LS_ID);
-  links = loadLocal(null); render();
-  setStatus(spaceStatus, "Saliste del espacio. Estás en modo local.");
-};
+$("btnExit").onclick = () => exitToLocal("Saliste del espacio. Estás en modo local.", "");
 $("btnCopyId").onclick = async () => {
   try { await navigator.clipboard.writeText(spaceId); toast("ID copiado ✓"); }
   catch { toast("ID: " + spaceId); }
@@ -307,9 +329,13 @@ $("btnCopyId").onclick = async () => {
 list.onclick = async (e) => {
   const btn = e.target.closest("button"); if (!btn) return;
   const li = e.target.closest(".link"); if (!li) return;
-  const item = links.find(l => l.id === li.dataset.id); if (!item) return;
+  const item = store.links.find(l => l.id === li.dataset.id); if (!item) return;
   const act = btn.dataset.act;
-  if (act === "del") { links = links.filter(l => l.id !== item.id); render(); schedulePush(); toast("Borrado"); }
+  if (act === "del") {
+    store.links = store.links.filter(l => l.id !== item.id);
+    store.tombstones[item.id] = Date.now(); // el borrado también se sincroniza
+    render(); schedulePush(); toast("Borrado");
+  }
   if (act === "open") window.open(item.url, "_blank", "noopener");
   if (act === "copy") {
     try { await navigator.clipboard.writeText(item.url); toast("Link copiado ✓"); }

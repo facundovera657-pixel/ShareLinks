@@ -2,10 +2,21 @@
 // Crea espacios reales de prueba (<1KB) en el backend apuntado por BASE_URL.
 import { test, describe } from "node:test";
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import vm from "node:vm";
 
 const BASE = process.env.BASE_URL || "https://sharelinks-pied.vercel.app";
 const API = `${BASE}/api/space`;
 const ID_RE = /^[A-Za-z0-9_-]{6,64}$/;
+
+// carga sync.js (script clásico de navegador) para testear la fusión sin duplicar código
+const syncSrc = readFileSync(new URL("../sync.js", import.meta.url), "utf8");
+const sandbox = {};
+vm.createContext(sandbox);
+vm.runInContext(syncSrc, sandbox);
+const { mergeStores, sameStore, normStore } = sandbox;
+assert.equal(typeof mergeStores, "function");
+assert.equal(typeof sameStore, "function");
 
 async function req(method, path = "", body) {
   const r = await fetch(API + path, {
@@ -112,6 +123,78 @@ describe("API /api/space", () => {
     assert.deepEqual(g.json.links, [good]);
   });
 
+  test("IDs nuevos evitan caracteres ambiguos (0/O/1/l/I)", async () => {
+    for (let i = 0; i < 3; i++) {
+      const { json } = await req("POST", "", { links: [] });
+      assert.match(json.id, ID_RE);
+      assert.doesNotMatch(json.id, /[01lIO]/);
+    }
+  });
+
+  test("tombstones viajan en PUT/GET y se sanean", async () => {
+    const { json: c } = await req("POST", "", { links: [] });
+    const link = mkLink(1);
+    const tomb = { [link.id]: Date.now(), mala: "x", ["__proto__"]: 123, corta: 1 };
+    const p = await req("PUT", `?id=${c.id}`, { links: [], tombstones: { ...tomb, [link.id]: tomb[link.id] } });
+    assert.equal(p.status, 200);
+    const g = await req("GET", `?id=${c.id}`);
+    assert.deepEqual(g.json.links, []);
+    assert.equal(g.json.tombstones[link.id], tomb[link.id]);
+    assert.ok(!("mala" in g.json.tombstones));
+  });
+
+  test("borrado se propaga entre dos dispositivos (tombstones)", async () => {
+    const A = mkLink(1), B = mkLink(2);
+    const { json: c } = await req("POST", "", { links: [A, B] });
+    // dispositivo 1 borra A
+    const dev1 = mergeStores({ links: [A, B], tombstones: {} }, { links: [A, B], tombstones: {} });
+    dev1.links = dev1.links.filter((l) => l.id !== A.id);
+    dev1.tombstones[A.id] = Date.now();
+    await req("PUT", `?id=${c.id}`, dev1);
+    // dispositivo 2 tenía todo y sincroniza
+    const cloud = (await req("GET", `?id=${c.id}`)).json;
+    const dev2 = mergeStores({ links: [A, B], tombstones: {} }, cloud);
+    assert.deepEqual(dev2.links.map((l) => l.id), [B.id]);
+    // dispositivo 2 re-sube y A sigue borrado (no resucita)
+    await req("PUT", `?id=${c.id}`, dev2);
+    const g = await req("GET", `?id=${c.id}`);
+    assert.deepEqual(g.json.links.map((l) => l.id), [B.id]);
+  });
+
+  test("link agregado offline sobrevive al pull (fusión)", async () => {
+    const A = mkLink(1), B = mkLink(2);
+    const { json: c } = await req("POST", "", { links: [A] });
+    const cloud = (await req("GET", `?id=${c.id}`)).json;
+    const merged = mergeStores({ links: [B], tombstones: {} }, cloud);
+    assert.deepEqual(merged.links.map((l) => l.id).sort(), [A.id, B.id].sort());
+  });
+});
+
+describe("mergeStores (unitario)", () => {
+  test("normStore migra array legacy y basura", () => {
+    assert.deepEqual(normStore([{ id: "a" }, null, 42]), { links: [{ id: "a" }], tombstones: {} });
+    assert.deepEqual(normStore(null), { links: [], tombstones: {} });
+    assert.deepEqual(normStore({}), { links: [], tombstones: {} });
+  });
+
+  test("gana el link más reciente y el borrado posterior elimina", () => {
+    const old = { id: "x", url: "https://a.com", ts: 100 };
+    const neu = { id: "x", url: "https://b.com", ts: 200 };
+    assert.deepEqual(mergeStores({ links: [old], tombstones: {} }, { links: [neu], tombstones: {} }).links, [neu]);
+    const m = mergeStores({ links: [neu], tombstones: {} }, { links: [], tombstones: { x: 300 } });
+    assert.deepEqual(m.links, []);
+    // borrado anterior al link no lo elimina
+    const m2 = mergeStores({ links: [], tombstones: { x: 50 } }, { links: [neu], tombstones: {} });
+    assert.deepEqual(m2.links, [neu]);
+  });
+
+  test("sameStore ignora el orden", () => {
+    const A = { id: "a", url: "https://a.com", ts: 1 };
+    const B = { id: "b", url: "https://b.com", ts: 2 };
+    assert.ok(sameStore({ links: [A, B], tombstones: {} }, { links: [B, A], tombstones: {} }));
+    assert.ok(!sameStore({ links: [A], tombstones: {} }, { links: [A, B], tombstones: {} }));
+  });
+
   test("DELETE → 405 y OPTIONS → CORS", async () => {
     const d = await req("DELETE", "?id=abcdef12");
     assert.equal(d.status, 405);
@@ -131,6 +214,8 @@ describe("frontend y PWA", () => {
     assert.match(html, /navigator\.serviceWorker\.register\("\/sw\.js"\)/);
     assert.match(html, /navigator\.share/);
     assert.match(html, /src="\/vendor\/qrcode\.min\.js"/);
+    assert.match(html, /src="\/sync\.js"/);
+    assert.match(html, /autocapitalize="off"/);
     assert.doesNotMatch(html, /qrserver/);
   });
 
@@ -168,6 +253,13 @@ describe("frontend y PWA", () => {
     assert.equal(r.status, 200);
     const js = await r.text();
     assert.match(js, /\/api\//);
+    assert.match(js, /\/sync\.js/);
     new (await import("node:vm").then((m) => m.Script))(js); // sintaxis válida
+  });
+
+  test("sync.js servido", async () => {
+    const r = await fetch(BASE + "/sync.js");
+    assert.equal(r.status, 200);
+    assert.match(await r.text(), /mergeStores/);
   });
 });

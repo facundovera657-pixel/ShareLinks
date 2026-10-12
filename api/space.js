@@ -6,7 +6,10 @@ const { put, get } = require("@vercel/blob");
 
 const validId = (id) => typeof id === "string" && /^[A-Za-z0-9_-]{6,64}$/.test(id);
 const pathOf = (id) => `spaces/${id}.json`;
-const newId = () => crypto.randomBytes(6).toString("base64url"); // 8 caracteres
+// Alfabeto sin caracteres ambiguos (0/O, 1/l/I) para que el ID se copie a mano sin errores
+const ALPH = "23456789abcdefghjkmnpqrstuwxyzABCDEFGHJKMNPQRSTUVWXYZ";
+const newId = () =>
+  Array.from(crypto.randomBytes(8), (b) => ALPH[b % ALPH.length]).join("");
 
 // Sanea links entrantes: solo items con id/url válidos, tope de cantidad y largo.
 const MAX_LINKS = 1000;
@@ -31,8 +34,36 @@ function isNotFound(e) {
   return !!e && (e.name === "BlobNotFoundError" || e.code === "BlobNotFoundError" || e.statusCode === 404);
 }
 
-// { status: "ok", links } | { status: "missing" } ; lanza ante errores reales
-async function readLinks(id) {
+// Sanea tombstones {linkId: ts}: claves válidas, ts numéricos, tope y poda >30 días.
+const MAX_TOMB = 2000;
+const TOMB_TTL = 30 * 24 * 3600 * 1000;
+function cleanTombstones(v) {
+  if (!v || typeof v !== "object" || Array.isArray(v)) return {};
+  const entries = [];
+  for (const k of Object.keys(v)) {
+    if (!/^[A-Za-z0-9_-]{1,64}$/.test(k)) continue;
+    if (!Number.isFinite(v[k])) continue;
+    entries.push([k, v[k]]);
+  }
+  entries.sort((a, b) => b[1] - a[1]);
+  const out = {};
+  const now = Date.now();
+  for (const [k, ts] of entries) {
+    if (Object.keys(out).length >= MAX_TOMB) break;
+    if (now - ts > TOMB_TTL) continue;
+    out[k] = ts;
+  }
+  return out;
+}
+
+function cleanState(body) {
+  const links = cleanLinks(body && body.links);
+  if (!links) return null;
+  return { links, tombstones: cleanTombstones(body.tombstones) };
+}
+
+// { status: "ok", store } | { status: "missing" } ; lanza ante errores reales
+async function readStore(id) {
   let res = null;
   try {
     res = await get(pathOf(id), { access: "private", useCache: false });
@@ -42,8 +73,17 @@ async function readLinks(id) {
   }
   if (!res || res.statusCode !== 200 || !res.stream) return { status: "missing" };
   const data = JSON.parse(await new Response(res.stream).text());
-  const links = Array.isArray(data) ? data : data.links;
-  return { status: "ok", links: Array.isArray(links) ? links : [] };
+  if (Array.isArray(data)) return { status: "ok", store: { links: data, tombstones: {} } }; // formato legacy
+  return {
+    status: "ok",
+    store: {
+      links: Array.isArray(data.links) ? data.links : [],
+      tombstones:
+        data.tombstones && typeof data.tombstones === "object" && !Array.isArray(data.tombstones)
+          ? data.tombstones
+          : {},
+    },
+  };
 }
 
 module.exports = async function handler(req, res) {
@@ -55,9 +95,9 @@ module.exports = async function handler(req, res) {
   try {
     // Crear espacio
     if (req.method === "POST") {
-      const links = cleanLinks(req.body && req.body.links) || [];
+      const store = cleanState(req.body) || { links: [], tombstones: {} };
       const id = newId();
-      await put(pathOf(id), JSON.stringify({ links }), {
+      await put(pathOf(id), JSON.stringify(store), {
         access: "private",
         contentType: "application/json",
         addRandomSuffix: false,
@@ -70,18 +110,18 @@ module.exports = async function handler(req, res) {
 
     // Leer espacio
     if (req.method === "GET") {
-      const found = await readLinks(id);
+      const found = await readStore(id);
       if (found.status === "missing") return res.status(404).json({ error: "Ese ID no existe" });
-      return res.status(200).json({ links: found.links });
+      return res.status(200).json(found.store);
     }
 
     // Guardar espacio
     if (req.method === "PUT") {
-      const links = cleanLinks(req.body && req.body.links);
-      if (!links) return res.status(400).json({ error: "links inválido" });
-      const found = await readLinks(id);
+      const store = cleanState(req.body);
+      if (!store) return res.status(400).json({ error: "links inválido" });
+      const found = await readStore(id);
       if (found.status === "missing") return res.status(404).json({ error: "Ese ID no existe" });
-      await put(pathOf(id), JSON.stringify({ links }), {
+      await put(pathOf(id), JSON.stringify(store), {
         access: "private",
         contentType: "application/json",
         addRandomSuffix: false,

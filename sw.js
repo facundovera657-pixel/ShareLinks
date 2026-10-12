@@ -1,7 +1,7 @@
 "use strict";
 /* ShareLinks SW — la app abre sin internet; /api/* siempre va a la red. */
 const CACHE = "sharelinks-v1";
-const CORE = ["/", "/index.html", "/manifest.webmanifest", "/vendor/qrcode.min.js", "/icons/icon-192.png", "/icons/icon-512.png"];
+const CORE = ["/", "/index.html", "/manifest.webmanifest", "/vendor/qrcode.min.js", "/sync.js", "/icons/icon-192.png", "/icons/icon-512.png"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(CACHE).then((c) => c.addAll(CORE)).then(() => self.skipWaiting()));
