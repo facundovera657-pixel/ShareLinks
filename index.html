@@ -65,7 +65,8 @@
   .actions{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:10px}
   .actions button{font-size:14px;padding:12px 6px}
   .empty{text-align:center;color:var(--mut);padding:26px 10px;font-size:14px}
-  .empty .art{font-size:42px;display:block;margin-bottom:10px;opacity:.55;filter:grayscale(.2)}
+  .empty .art{display:block;margin:0 auto 10px;opacity:.55}
+  .empty .art svg{width:44px;height:44px;stroke:var(--mut);fill:none;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
   .status{font-size:13px;margin-top:8px;min-height:18px;color:var(--mut)}
   .status.ok{color:var(--ok)} .status.err{color:var(--err)}
   #toast{position:fixed;left:50%;bottom:calc(22px + env(safe-area-inset-bottom));transform:translateX(-50%) translateY(20px);background:#222b38;color:#fff;padding:12px 16px;border-radius:12px;font-size:14px;opacity:0;transition:.25s;pointer-events:none;max-width:90vw;text-align:center;border:1px solid var(--line);z-index:10}
@@ -126,7 +127,7 @@
   <section class="card">
     <h2>3 · Mis links (<span id="count">0</span>)</h2>
     <ul id="list"></ul>
-    <div class="empty" id="empty"><span class="art">🔗</span>Aún no hay links.<br>Pega uno arriba y pulsa Guardar.</div>
+    <div class="empty" id="empty"><span class="art"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></span>Aún no hay links.<br>Pega uno arriba y pulsa Guardar.</div>
   </section>
 
   <footer>
