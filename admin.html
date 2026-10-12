@@ -56,7 +56,7 @@
 
   <div id="panel" style="display:none">
     <div class="bar">
-      <span id="count">0 espacios</span><span class="sp"></span>
+      <span id="count">Mostrando 0</span><span class="sp"></span>
       <button class="ghost" id="btnASel">Seleccionar</button>
       <button class="ghost" id="btnReload">↻ Recargar</button>
       <button class="ghost" id="btnLogout">Salir</button>
@@ -92,6 +92,11 @@ const H = () => ({ "X-Admin-Secret": secret() });
 const fmtD = (ts) => { try { return ts ? new Date(ts).toLocaleString("es") : "—"; } catch { return "—"; } };
 
 let cursor = null;
+let lastHasMore = false;
+function paintCount() {
+  const n = $("rows").children.length;
+  $("count").textContent = "Mostrando " + n + (lastHasMore ? " · hay más" : " · todos");
+}
 let aselMode = false;
 const asel = new Set();
 
@@ -144,8 +149,7 @@ $("btnADel").onclick = async () => {
   await Promise.all(workers);
   setASelMode(false);
   pruneASel();
-  const n = $("rows").children.length;
-  $("count").textContent = n + (n === 1 ? " espacio" : " espacios");
+  paintCount();
   setStatus($("listStatus"), fail ? `Borrados ${ok}, fallaron ${fail}.` : `Borrados ${ok} ✓`, fail ? "err" : "ok");
 };
 $("rows").addEventListener("change", (e) => {
@@ -169,6 +173,7 @@ async function load(more) {
     const d = await api(q);
     if (!more) $("rows").innerHTML = "";
     cursor = d.cursor;
+    lastHasMore = !!d.hasMore;
     $("btnMore").style.display = d.hasMore ? "block" : "none";
     for (const s of d.spaces) {
       const tr = document.createElement("tr");
@@ -181,7 +186,7 @@ async function load(more) {
       $("rows").appendChild(tr);
     }
     const n = $("rows").children.length;
-    $("count").textContent = n + (n === 1 ? " espacio" : " espacios");
+    paintCount();
     pruneASel();
     setStatus($("listStatus"), "");
   } catch (e) {
@@ -209,8 +214,7 @@ $("rows").addEventListener("click", async (e) => {
     try {
       await api("?id=" + encodeURIComponent(d.dataset.d), { method: "DELETE" });
       d.closest("tr").remove();
-      const n = $("rows").children.length;
-      $("count").textContent = n + (n === 1 ? " espacio" : " espacios");
+      paintCount();
     } catch (err) { alert(err.message); }
   }
 });
@@ -235,7 +239,13 @@ function logout(msg) {
   if (msg) setStatus($("loginStatus"), msg, "err");
 }
 $("btnLogout").onclick = () => logout();
-$("btnReload").onclick = () => load(false);
+$("btnReload").onclick = async () => {
+  // recarga hasta la profundidad ya cargada (no vuelve a solo 100)
+  const target = Math.max($("rows").children.length, 1);
+  setStatus($("listStatus"), "Recargando…");
+  await load(false);
+  while ($("rows").children.length < target && cursor) await load(true);
+};
 $("btnMore").onclick = () => load(true);
 
 async function login() {

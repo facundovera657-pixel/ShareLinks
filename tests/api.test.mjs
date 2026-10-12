@@ -422,6 +422,7 @@ describe("frontend y PWA", () => {
     assert.match(html, /id="selbarA"/);
     assert.match(html, /id="btnADel"/);
     assert.match(html, /aselbox/);
+    assert.match(html, /hay más/);
     assert.doesNotMatch(html, /ADMIN_SECRET["']?\s*[:=]/);
   });
 });
