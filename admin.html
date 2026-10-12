@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="robots" content="noindex,nofollow" />
+<title>ShareLinks · Admin</title>
+<meta name="theme-color" content="#0f1115" />
+<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+<style>
+  :root{--bg:#0f1115;--card:#171b22;--card2:#1e242e;--txt:#f2f4f8;--mut:#9aa4b2;--acc:#4f8cff;--ok:#2fbf71;--err:#ff5d5d;--line:#262d38;--r:14px}
+  *{box-sizing:border-box}
+  body{margin:0;font-family:system-ui,-apple-system,"Segoe UI",Roboto,Arial,sans-serif;background:var(--bg);color:var(--txt);min-height:100vh}
+  .wrap{max-width:720px;margin:0 auto;padding:20px 16px 60px}
+  header{display:flex;align-items:center;gap:10px;margin:6px 0 14px}
+  .logo{width:38px;height:38px;border-radius:12px;background:linear-gradient(135deg,var(--acc),#8a5cff);display:grid;place-items:center;font-size:20px}
+  h1{font-size:19px;margin:0} header p{margin:2px 0 0;color:var(--mut);font-size:13px}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:14px;margin-bottom:12px}
+  label{font-size:13px;color:var(--mut);display:block;margin:10px 0 6px}
+  input{width:100%;padding:12px;border-radius:11px;border:1px solid var(--line);background:#0c0e12;color:var(--txt);font-size:16px;outline:none}
+  input:focus{border-color:var(--acc)}
+  .row{display:flex;gap:8px;margin-top:10px;flex-wrap:wrap}
+  button{border:0;border-radius:11px;padding:11px 14px;font-size:14px;font-weight:600;cursor:pointer}
+  .btn{background:var(--acc);color:#fff} .btn:hover{filter:brightness(1.1)}
+  .ghost{background:var(--card2);color:var(--txt);border:1px solid var(--line)}
+  .danger{background:transparent;color:var(--err);border:1px solid #4d2429}
+  .status{font-size:13px;margin-top:8px;min-height:18px;color:var(--mut)}
+  .status.ok{color:var(--ok)} .status.err{color:var(--err)}
+  table{width:100%;border-collapse:collapse;font-size:14px}
+  th{text-align:left;color:var(--mut);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.04em;padding:8px 6px;border-bottom:1px solid var(--line)}
+  td{padding:10px 6px;border-bottom:1px solid var(--line);vertical-align:top}
+  td code{font-size:13px;word-break:break-all}
+  .links{font-size:13px;color:var(--mut);word-break:break-all;max-height:150px;overflow:auto;margin-top:6px;background:#0c0e12;border-radius:8px;padding:8px}
+  .mut{color:var(--mut);font-size:12px}
+  .bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
+  .bar .sp{flex:1}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div class="logo">🔗</div>
+    <div><h1>ShareLinks · Admin</h1><p>Control de espacios (acceso con secreto)</p></div>
+  </header>
+
+  <section class="card" id="loginCard">
+    <label for="inSecret">Secreto de admin (variable de entorno)</label>
+    <input id="inSecret" type="password" autocomplete="off" placeholder="••••••••" />
+    <div class="row"><button class="btn" id="btnLogin">Entrar</button></div>
+    <div class="status" id="loginStatus"></div>
+  </section>
+
+  <div id="panel" style="display:none">
+    <div class="bar">
+      <span id="count">0 espacios</span><span class="sp"></span>
+      <button class="ghost" id="btnReload">↻ Recargar</button>
+      <button class="ghost" id="btnLogout">Salir</button>
+    </div>
+    <section class="card">
+      <label for="inName">Crear espacio (nombre de 5 a 12 letras)</label>
+      <div class="row"><input id="inName" style="flex:1;min-width:140px" placeholder="Ej: Casa" maxlength="12" /><button class="btn" id="btnMk">Crear</button></div>
+      <div class="status" id="mkStatus"></div>
+    </section>
+    <section class="card">
+      <table>
+        <thead><tr><th>Espacio</th><th>Links</th><th>Acciones</th></tr></thead>
+        <tbody id="rows"></tbody>
+      </table>
+      <div class="row"><button class="ghost" id="btnMore" style="display:none">Cargar más</button></div>
+      <div class="status" id="listStatus"></div>
+    </section>
+  </div>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s).replace(/[&<>"']/g, (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+const setStatus = (el, msg, cls) => { el.textContent = msg || ""; el.className = "status" + (cls ? " " + cls : ""); };
+const secret = () => sessionStorage.getItem("sl_admin") || "";
+const H = () => ({ "X-Admin-Secret": secret() });
+const fmtD = (ts) => { try { return ts ? new Date(ts).toLocaleString("es") : "—"; } catch { return "—"; } };
+
+let cursor = null;
+
+async function api(path, opts) {
+  const r = await fetch("/api/admin" + path, { ...(opts || {}), headers: { ...(opts && opts.headers), ...H() } });
+  if (r.status === 401) throw new Error("Secreto incorrecto.");
+  const d = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error((d && d.error) || ("HTTP " + r.status));
+  return d;
+}
+
+async function load(more) {
+  setStatus($("listStatus"), "Cargando…");
+  try {
+    const q = "?action=list&limit=100" + (more && cursor ? "&cursor=" + encodeURIComponent(cursor) : "");
+    const d = await api(q);
+    if (!more) $("rows").innerHTML = "";
+    cursor = d.cursor;
+    $("btnMore").style.display = d.hasMore ? "block" : "none";
+    for (const s of d.spaces) {
+      const tr = document.createElement("tr");
+      tr.innerHTML =
+        `<td><b>${esc(s.name || "(sin nombre)")}</b><br><code>${esc(s.id)}</code><br><span class="mut">creado ${esc(fmtD(s.created))}</span></td>` +
+        `<td>${s.links}</td>` +
+        `<td><div class="row" style="margin:0"><button class="ghost" data-v="${esc(s.id)}">Ver</button><button class="danger" data-d="${esc(s.id)}" data-n="${esc(s.name || s.id)}">Borrar</button></div><div class="links" style="display:none"></div></td>`;
+      $("rows").appendChild(tr);
+    }
+    const n = $("rows").children.length;
+    $("count").textContent = n + (n === 1 ? " espacio" : " espacios");
+    setStatus($("listStatus"), "");
+  } catch (e) {
+    if (/incorrecto/.test(e.message)) return logout("Sesión inválida, ingresá de nuevo.");
+    setStatus($("listStatus"), e.message, "err");
+  }
+}
+
+$("rows").addEventListener("click", async (e) => {
+  const v = e.target.closest("[data-v]");
+  const d = e.target.closest("[data-d]");
+  if (v) {
+    const box = v.closest("td").querySelector(".links");
+    if (box.style.display !== "none") { box.style.display = "none"; return; }
+    box.style.display = "block"; box.textContent = "Leyendo…";
+    try {
+      const s = await api("?action=read&id=" + encodeURIComponent(v.dataset.v));
+      box.innerHTML = s.links.length
+        ? s.links.map((l) => `${esc(l.url)}`).join("<br>")
+        : "<span class='mut'>(vacío)</span>";
+    } catch (err) { box.textContent = err.message; }
+  }
+  if (d) {
+    if (!confirm(`¿Borrar el espacio "${d.dataset.n}"? Se libera el nombre.`)) return;
+    try {
+      await api("?id=" + encodeURIComponent(d.dataset.d), { method: "DELETE" });
+      d.closest("tr").remove();
+      const n = $("rows").children.length;
+      $("count").textContent = n + (n === 1 ? " espacio" : " espacios");
+    } catch (err) { alert(err.message); }
+  }
+});
+
+$("btnMk").onclick = async () => {
+  const name = $("inName").value.trim();
+  setStatus($("mkStatus"), "Creando…");
+  try {
+    const r = await fetch("/api/space", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ links: [], name }) });
+    const dd = await r.json().catch(() => ({}));
+    if (!r.ok) throw new Error((dd && dd.error) || ("HTTP " + r.status));
+    $("inName").value = "";
+    setStatus($("mkStatus"), "Creado ✓ ID: " + dd.id, "ok");
+    load(false);
+  } catch (err) { setStatus($("mkStatus"), err.message, "err"); }
+};
+
+function logout(msg) {
+  sessionStorage.removeItem("sl_admin");
+  $("panel").style.display = "none";
+  $("loginCard").style.display = "block";
+  if (msg) setStatus($("loginStatus"), msg, "err");
+}
+$("btnLogout").onclick = () => logout();
+$("btnReload").onclick = () => load(false);
+$("btnMore").onclick = () => load(true);
+
+async function login() {
+  const v = $("inSecret").value;
+  if (!v) { setStatus($("loginStatus"), "Escribí el secreto.", "err"); return; }
+  sessionStorage.setItem("sl_admin", v);
+  setStatus($("loginStatus"), "Verificando…");
+  try {
+    await fetch("/api/admin?action=list&limit=1", { headers: { "X-Admin-Secret": v } }).then(async (r) => {
+      if (r.status === 401) throw new Error("Secreto incorrecto.");
+      if (!r.ok) throw new Error("HTTP " + r.status);
+    });
+    $("inSecret").value = "";
+    setStatus($("loginStatus"), "");
+    $("loginCard").style.display = "none";
+    $("panel").style.display = "block";
+    cursor = null;
+    load(false);
+  } catch (e) {
+    sessionStorage.removeItem("sl_admin");
+    setStatus($("loginStatus"), e.message, "err");
+  }
+}
+$("btnLogin").onclick = login;
+$("inSecret").addEventListener("keydown", (e) => { if (e.key === "Enter") login(); });
+if (secret()) { $("loginCard").style.display = "none"; $("panel").style.display = "block"; load(false); }
+</script>
+</body>
+</html>

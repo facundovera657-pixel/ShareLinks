@@ -381,4 +381,69 @@ describe("frontend y PWA", () => {
     assert.equal(r.status, 200);
     assert.match(await r.text(), /mergeStores/);
   });
+
+  test("admin.html servido, con noindex y sin secreto embebido", async () => {
+    const r = await fetch(BASE + "/admin.html");
+    assert.equal(r.status, 200);
+    const html = await r.text();
+    assert.match(html, /noindex/);
+    assert.match(html, /X-Admin-Secret/);
+    assert.match(html, /sessionStorage/);
+    assert.doesNotMatch(html, /ADMIN_SECRET["']?\s*[:=]/);
+  });
+});
+
+const ADMIN = process.env.ADMIN_SECRET || "";
+const describeAdmin = ADMIN ? describe : describe.skip;
+
+describeAdmin("admin /api/admin (requiere ADMIN_SECRET)", () => {
+  const H = () => ({ "X-Admin-Secret": ADMIN });
+  const admin = async (method, path, body) => {
+    const r = await fetch(`${BASE}/api/admin${path}`, {
+      method,
+      headers: { "Content-Type": "application/json", ...H() },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    return { status: r.status, json: await r.json().catch(() => null) };
+  };
+
+  test("sin secreto o con secreto malo → 401", async () => {
+    const a = await fetch(`${BASE}/api/admin?action=list`);
+    assert.equal(a.status, 401);
+    const b = await fetch(`${BASE}/api/admin?action=list`, { headers: { "X-Admin-Secret": "incorrecto" } });
+    assert.equal(b.status, 401);
+  });
+
+  test("CRUD: crear → listar → leer → borrar → nombre reusable", async () => {
+    const name = UName("AdmCr");
+    const c = await req("POST", "", { links: [mkLink(1)], name });
+    assert.equal(c.status, 200);
+    const id = c.json.id;
+
+    const l = await admin("GET", "?action=list&limit=200");
+    assert.equal(l.status, 200);
+    assert.ok(l.json.spaces.some((s) => s.id === id && s.name === name && s.links === 1));
+
+    const r = await admin("GET", `?action=read&id=${id}`);
+    assert.equal(r.status, 200);
+    assert.equal(r.json.name, name);
+    assert.equal(r.json.links.length, 1);
+
+    const d = await admin("DELETE", `?id=${id}`);
+    assert.equal(d.status, 200);
+    assert.deepEqual(d.json, { ok: true });
+
+    const g = await req("GET", `?id=${id}`);
+    assert.equal(g.status, 404);
+
+    const reuse = await req("POST", "", { links: [], name });
+    assert.equal(reuse.status, 200);
+    await admin("DELETE", `?id=${reuse.json.id}`);
+  });
+
+  test("borrar inexistente → 404; id inválido → 400", async () => {
+    assert.equal((await admin("DELETE", "?id=noexiste123abc")).status, 404);
+    assert.equal((await admin("DELETE", "?id=..")).status, 400);
+    assert.equal((await admin("GET", "?action=read&id=..")).status, 400);
+  });
 });
