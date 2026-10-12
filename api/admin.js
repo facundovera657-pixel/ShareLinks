@@ -23,7 +23,10 @@ function isNotFound(e) {
   return !!e && (e.name === "BlobNotFoundError" || e.code === "BlobNotFoundError" || e.statusCode === 404);
 }
 function isPrecond(e) {
-  return !!e && (e.name === "BlobPreconditionFailedError" || e.code === "BlobPreconditionFailedError" || e.statusCode === 412);
+  return !!e && (
+    e.name === "BlobPreconditionFailedError" || e.code === "BlobPreconditionFailedError" || e.statusCode === 412 ||
+    (e.name === "BlobError" && /conflicting operation/i.test(e.message || ""))
+  );
 }
 function isTransient(e) {
   return !!e && (

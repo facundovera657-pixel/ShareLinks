@@ -37,7 +37,11 @@ function isNotFound(e) {
   return !!e && (e.name === "BlobNotFoundError" || e.code === "BlobNotFoundError" || e.statusCode === 404);
 }
 function isPrecond(e) {
-  return !!e && (e.name === "BlobPreconditionFailedError" || e.code === "BlobPreconditionFailedError" || e.statusCode === 412);
+  return !!e && (
+    e.name === "BlobPreconditionFailedError" || e.code === "BlobPreconditionFailedError" || e.statusCode === 412 ||
+    // el store también rechaza escrituras condicionales concurrentes con este error
+    (e.name === "BlobError" && /conflicting operation/i.test(e.message || ""))
+  );
 }
 // Errores transitorios del storage: ameritan reintento con espera.
 function isTransient(e) {
