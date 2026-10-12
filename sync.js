@@ -101,6 +101,32 @@ function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
 }
 
+// Parsea un texto exportado: devuelve store saneado o null si es inválido.
+function parseImport(text) {
+  let data = null;
+  try {
+    data = JSON.parse(String(text));
+  } catch {
+    return null;
+  }
+  const s = normStore(data);
+  const links = [];
+  for (const it of s.links) {
+    if (!it || typeof it !== "object") continue;
+    const id = typeof it.id === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(it.id) ? it.id : null;
+    const url = normUrl(it.url);
+    if (!id || !url) continue;
+    links.push({ id, url, ts: Number.isFinite(it.ts) ? it.ts : Date.now() });
+  }
+  const tombstones = {};
+  if (s.tombstones && typeof s.tombstones === "object" && !Array.isArray(s.tombstones)) {
+    for (const k of Object.keys(s.tombstones)) {
+      if (/^[A-Za-z0-9_-]{1,64}$/.test(k) && Number.isFinite(s.tombstones[k])) tombstones[k] = s.tombstones[k];
+    }
+  }
+  return { links, tombstones };
+}
+
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { normStore, mergeStores, sameStore, applyBulkDelete, normUrl, esc, validName, MAX_URL_LEN };
+  module.exports = { normStore, mergeStores, sameStore, applyBulkDelete, normUrl, esc, validName, parseImport, MAX_URL_LEN };
 }

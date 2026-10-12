@@ -15,7 +15,7 @@ const sandbox = {};
 vm.createContext(sandbox);
 sandbox.URL = URL; // el contexto vm no trae globales WHATWG; normUrl lo necesita
 vm.runInContext(syncSrc, sandbox);
-const { mergeStores, sameStore, normStore, normUrl, esc, validName, applyBulkDelete } = sandbox;
+const { mergeStores, sameStore, normStore, normUrl, esc, validName, applyBulkDelete, parseImport } = sandbox;
 assert.equal(typeof mergeStores, "function");
 assert.equal(typeof sameStore, "function");
 assert.equal(typeof normUrl, "function");
@@ -327,8 +327,18 @@ describe("mergeStores (unitario)", () => {
     assert.ok(!sameStore({ links: [A], tombstones: {} }, { links: [A, B], tombstones: {} }));
   });
 
-  test("applyBulkDelete borra varios y anota tombstones", () => {
-    const A = { id: "a", url: "https://a.com", ts: 1 };
+  test("parseImport sanea texto exportado o devuelve null", () => {
+    assert.equal(parseImport("no json"), null);
+    assert.equal(parseImport(""), null);
+    assert.equal(parseImport(null), null);
+    const good = { id: "a", url: "https://a.com", ts: 5 };
+    const r = parseImport(JSON.stringify({ links: [good, null, { id: "b", url: "javascript:x" }, { url: "https://s.com" }], tombstones: { a: 10, "??": 3 } }));
+    assert.deepEqual(dc(r.links), [good]);
+    assert.deepEqual(dc(r.tombstones), { a: 10 });
+    assert.deepEqual(dc(parseImport("[]")), { links: [], tombstones: {} });
+  });
+
+  test("applyBulkDelete borra varios y anota tombstones", () => {    const A = { id: "a", url: "https://a.com", ts: 1 };
     const B = { id: "b", url: "https://b.com", ts: 2 };
     const C = { id: "c", url: "https://c.com", ts: 3 };
     const r = applyBulkDelete({ links: [A, B, C], tombstones: {} }, ["a", "c", "zzz"]);
@@ -356,6 +366,9 @@ describe("frontend y PWA", () => {
     assert.match(html, /id="btnSel"/);
     assert.match(html, /id="selbar"/);
     assert.match(html, /id="btnDelSel"/);
+    assert.match(html, /id="btnExport"/);
+    assert.match(html, /id="btnImport"/);
+    assert.match(html, /id="impBox"/);
     assert.match(html, /selbox/);
     assert.match(html, /5 a 12 letras/);
     assert.match(html, /autocapitalize="off"/);

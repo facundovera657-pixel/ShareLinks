@@ -35,6 +35,8 @@
   label{font-size:13px;color:var(--mut);display:block;margin:10px 0 6px}
   input{width:100%;padding:13px 12px;border-radius:11px;border:1px solid var(--line);background:#0c0e12;color:var(--txt);font-size:16px;outline:none;transition:border-color .15s ease,box-shadow .15s ease}
   input:focus{border-color:var(--acc);box-shadow:0 0 0 3px rgba(79,140,255,.22)}
+  textarea{width:100%;padding:12px;border-radius:11px;border:1px solid var(--line);background:#0c0e12;color:var(--txt);font-size:13px;font-family:ui-monospace,Consolas,monospace;outline:none;resize:vertical}
+  textarea:focus{border-color:var(--acc)}
   .row{display:flex;gap:8px;margin-top:10px}
   button{border:0;border-radius:11px;padding:12px 14px;font-size:15px;font-weight:600;cursor:pointer;transition:transform .08s ease,filter .15s ease,border-color .15s ease;-webkit-tap-highlight-color:transparent}
   button:focus-visible{outline:2px solid var(--acc);outline-offset:2px}
@@ -154,6 +156,15 @@
     </div>
     <ul id="list"></ul>
     <div class="empty" id="empty"><span class="art"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></span>Aún no hay links.<br>Pega uno arriba y pulsa Guardar.</div>
+    <div class="row" style="margin-top:12px">
+      <button class="ghost" id="btnExport">Exportar</button>
+      <button class="ghost" id="btnImport">Importar</button>
+    </div>
+    <div id="impBox" style="display:none;margin-top:10px">
+      <label for="inImport">Pega el texto exportado del otro aparato</label>
+      <textarea id="inImport" rows="3" placeholder='{"links":…}'></textarea>
+      <div class="row"><button class="btn" id="btnDoImport">Confirmar importación</button></div>
+    </div>
   </section>
 
   <footer>
@@ -472,6 +483,29 @@ list.onclick = async (e) => {
     else if (await copyText(item.url)) { toast("Tu celu no tiene Compartir: link copiado ✓"); flashBtn(btn); }
     else prompt("Copia tu link:", item.url);
   }
+};
+
+$("btnImport").onclick = () => {
+  const box = $("impBox");
+  const open = box.style.display !== "none";
+  box.style.display = open ? "none" : "block";
+  if (!open) $("inImport").focus();
+};
+$("btnExport").onclick = async () => {
+  const txt = JSON.stringify({ links: store.links, tombstones: store.tombstones, name: store.name || "", exportedAt: Date.now() });
+  if (await copyText(txt)) toast("Copiado: pégalo en tu otro aparato ✓");
+  else toast("No se pudo copiar");
+};
+$("btnDoImport").onclick = () => {
+  const parsed = parseImport($("inImport").value);
+  if (!parsed || (!parsed.links.length && !Object.keys(parsed.tombstones).length)) { toast("Texto inválido: nada para importar"); return; }
+  const before = store.links.length;
+  store = { ...mergeStores(store, parsed), name: store.name, created: store.created };
+  $("inImport").value = "";
+  $("impBox").style.display = "none";
+  saveStore(spaceId || null, store); render(); schedulePush();
+  const added = store.links.length - before;
+  toast(added > 0 ? `Importados ${added} link(s) ✓` : "Sin novedades (ya los tenías)");
 };
 
 /* ===== Init ===== */
