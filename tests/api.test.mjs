@@ -418,6 +418,10 @@ describe("frontend y PWA", () => {
     assert.match(html, /noindex/);
     assert.match(html, /X-Admin-Secret/);
     assert.match(html, /sessionStorage/);
+    assert.match(html, /id="btnASel"/);
+    assert.match(html, /id="selbarA"/);
+    assert.match(html, /id="btnADel"/);
+    assert.match(html, /aselbox/);
     assert.doesNotMatch(html, /ADMIN_SECRET["']?\s*[:=]/);
   });
 });
@@ -474,5 +478,25 @@ describeAdmin("admin /api/admin (requiere ADMIN_SECRET)", () => {
     assert.equal((await admin("DELETE", "?id=noexiste123abc")).status, 404);
     assert.equal((await admin("DELETE", "?id=..")).status, 400);
     assert.equal((await admin("GET", "?action=read&id=..")).status, 400);
+  });
+
+  test("borrado en lote: 3 espacios se eliminan y liberan nombres", async () => {
+    const names = [UName("Lote"), UName("Lote"), UName("Lote")];
+    const ids = [];
+    for (const name of names) {
+      const c = await req("POST", "", { links: [mkLink(1)], name });
+      assert.equal(c.status, 200);
+      ids.push(c.json.id);
+    }
+    for (const id of ids) {
+      const d = await admin("DELETE", `?id=${id}`);
+      assert.equal(d.status, 200);
+    }
+    for (const id of ids) {
+      assert.equal((await req("GET", `?id=${id}`)).status, 404);
+    }
+    const reuse = await req("POST", "", { links: [], name: names[0] });
+    assert.equal(reuse.status, 200);
+    await admin("DELETE", `?id=${reuse.json.id}`);
   });
 });

@@ -34,6 +34,10 @@
   .mut{color:var(--mut);font-size:12px}
   .bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:12px}
   .bar .sp{flex:1}
+  .aselbox{display:none;width:18px;height:18px;accent-color:var(--acc);cursor:pointer}
+  table.sel .aselbox{display:block}
+  td.acol,th.acol{width:34px}
+  #btnADel{color:var(--err);border-color:#4d2429}
 </style>
 </head>
 <body>
@@ -53,8 +57,14 @@
   <div id="panel" style="display:none">
     <div class="bar">
       <span id="count">0 espacios</span><span class="sp"></span>
+      <button class="ghost" id="btnASel">Seleccionar</button>
       <button class="ghost" id="btnReload">↻ Recargar</button>
       <button class="ghost" id="btnLogout">Salir</button>
+    </div>
+    <div class="row" id="selbarA" style="display:none;margin-bottom:12px">
+      <button class="ghost" id="btnAAll">Todas</button>
+      <button class="ghost" id="btnADel">Borrar (0)</button>
+      <button class="ghost" id="btnACancel">Cancelar</button>
     </div>
     <section class="card">
       <label for="inName">Crear espacio (nombre de 5 a 12 letras)</label>
@@ -62,8 +72,8 @@
       <div class="status" id="mkStatus"></div>
     </section>
     <section class="card">
-      <table>
-        <thead><tr><th>Espacio</th><th>Links</th><th>Acciones</th></tr></thead>
+      <table id="tbl">
+        <thead><tr><th class="acol"></th><th>Espacio</th><th>Links</th><th>Acciones</th></tr></thead>
         <tbody id="rows"></tbody>
       </table>
       <div class="row"><button class="ghost" id="btnMore" style="display:none">Cargar más</button></div>
@@ -82,6 +92,67 @@ const H = () => ({ "X-Admin-Secret": secret() });
 const fmtD = (ts) => { try { return ts ? new Date(ts).toLocaleString("es") : "—"; } catch { return "—"; } };
 
 let cursor = null;
+let aselMode = false;
+const asel = new Set();
+
+function setASelMode(on) {
+  aselMode = on;
+  if (!on) asel.clear();
+  $("tbl").classList.toggle("sel", on);
+  $("selbarA").style.display = on ? "flex" : "none";
+  $("btnASel").textContent = on ? "Listo" : "Seleccionar";
+  updateASelBar();
+}
+function updateASelBar() {
+  const n = asel.size;
+  $("btnADel").textContent = "Borrar (" + n + ")";
+  $("btnADel").disabled = n === 0;
+  $("btnADel").style.opacity = n ? "1" : ".5";
+}
+function pruneASel() {
+  const alive = new Set([...$("rows").children].map((tr) => tr.dataset.id));
+  for (const id of [...asel]) if (!alive.has(id)) asel.delete(id);
+  updateASelBar();
+}
+$("btnASel").onclick = () => setASelMode(!aselMode);
+$("btnACancel").onclick = () => setASelMode(false);
+$("btnAAll").onclick = () => {
+  const ids = [...$("rows").children].map((tr) => tr.dataset.id);
+  if (ids.length && ids.every((id) => asel.has(id))) asel.clear();
+  else ids.forEach((id) => asel.add(id));
+  $("rows").querySelectorAll(".aselbox").forEach((cb) => { cb.checked = asel.has(cb.dataset.sel); });
+  updateASelBar();
+};
+$("btnADel").onclick = async () => {
+  if (!asel.size) return;
+  const ids = [...asel];
+  if (!confirm(`¿Borrar ${ids.length} espacio(s)? Se liberan sus nombres.`)) return;
+  setStatus($("listStatus"), "Borrando…");
+  let ok = 0, fail = 0;
+  const queue = [...ids];
+  const workers = Array.from({ length: 5 }, async () => {
+    while (queue.length) {
+      const id = queue.shift();
+      try {
+        await api("?id=" + encodeURIComponent(id), { method: "DELETE" });
+        ok++;
+        const tr = $("rows").querySelector(`tr[data-id="${CSS.escape(id)}"]`);
+        if (tr) tr.remove();
+      } catch { fail++; }
+    }
+  });
+  await Promise.all(workers);
+  setASelMode(false);
+  pruneASel();
+  const n = $("rows").children.length;
+  $("count").textContent = n + (n === 1 ? " espacio" : " espacios");
+  setStatus($("listStatus"), fail ? `Borrados ${ok}, fallaron ${fail}.` : `Borrados ${ok} ✓`, fail ? "err" : "ok");
+};
+$("rows").addEventListener("change", (e) => {
+  const cb = e.target.closest(".aselbox"); if (!cb) return;
+  if (cb.checked) asel.add(cb.dataset.sel); else asel.delete(cb.dataset.sel);
+  updateASelBar();
+});
 
 async function api(path, opts) {
   const r = await fetch("/api/admin" + path, { ...(opts || {}), headers: { ...(opts && opts.headers), ...H() } });
@@ -101,7 +172,9 @@ async function load(more) {
     $("btnMore").style.display = d.hasMore ? "block" : "none";
     for (const s of d.spaces) {
       const tr = document.createElement("tr");
+      tr.dataset.id = s.id;
       tr.innerHTML =
+        `<td class="acol"><input type="checkbox" class="aselbox" data-sel="${esc(s.id)}" ${asel.has(s.id) ? "checked" : ""} aria-label="Seleccionar espacio ${esc(s.name || s.id)}" /></td>` +
         `<td><b>${esc(s.name || "(sin nombre)")}</b><br><code>${esc(s.id)}</code><br><span class="mut">creado ${esc(fmtD(s.created))}</span></td>` +
         `<td>${s.links}</td>` +
         `<td><div class="row" style="margin:0"><button class="ghost" data-v="${esc(s.id)}">Ver</button><button class="danger" data-d="${esc(s.id)}" data-n="${esc(s.name || s.id)}">Borrar</button></div><div class="links" style="display:none"></div></td>`;
@@ -109,6 +182,7 @@ async function load(more) {
     }
     const n = $("rows").children.length;
     $("count").textContent = n + (n === 1 ? " espacio" : " espacios");
+    pruneASel();
     setStatus($("listStatus"), "");
   } catch (e) {
     if (/incorrecto/.test(e.message)) return logout("Sesión inválida, ingresá de nuevo.");
