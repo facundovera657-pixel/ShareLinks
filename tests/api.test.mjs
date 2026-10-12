@@ -168,6 +168,19 @@ describe("API /api/space", () => {
     assert.equal(other.status, 200);
   });
 
+  test("carrera por el mismo nombre → gana uno solo", async () => {
+    const name = UName("Race");
+    const [a, b] = await Promise.all([
+      req("POST", "", { links: [], name }),
+      req("POST", "", { links: [], name }),
+    ]);
+    const codes = [a.status, b.status].sort();
+    assert.deepEqual(codes, [200, 400]);
+    const winner = a.status === 200 ? a.json.id : b.json.id;
+    const g = await req("GET", `?id=${winner}`);
+    assert.equal(g.json.name, name);
+  });
+
   test("GET devuelve nombre y fecha; PUT no los cambia", async () => {
     const body = mkSpace([mkLink(1)]);
     const { json: c } = await req("POST", "", body);

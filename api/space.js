@@ -2,7 +2,7 @@
 // API propia de ShareLinks — guarda los links de cada espacio (ID) en Vercel Blob.
 // Sin cuentas: quien conoce el ID puede leer/escribir ese espacio.
 const crypto = require("crypto");
-const { put, get, del } = require("@vercel/blob");
+const { put, get, del, head } = require("@vercel/blob");
 const { validName } = require("../sync.js");
 
 const validId = (id) => typeof id === "string" && /^[A-Za-z0-9_-]{6,64}$/.test(id);
@@ -45,20 +45,27 @@ const REG_PATH = "registry/names.json";
 async function readRegistry() {
   try {
     const res = await get(REG_PATH, { access: "private", useCache: false });
-    if (!res || res.statusCode !== 200 || !res.stream) return { names: {}, etag: null };
-    const etag = res.blob && res.blob.etag ? res.blob.etag : null;
+    if (!res || res.statusCode !== 200 || !res.stream) return {};
     let data = null;
     try {
       data = JSON.parse(await new Response(res.stream).text());
     } catch {
       data = null;
     }
-    return {
-      names: data && typeof data === "object" && !Array.isArray(data) ? data : {},
-      etag,
-    };
+    return data && typeof data === "object" && !Array.isArray(data) ? data : {};
   } catch (e) {
-    if (isNotFound(e)) return { names: {}, etag: null };
+    if (isNotFound(e)) return {};
+    throw e;
+  }
+}
+
+// ETag canónico vía head(): el de get() viene del header de descarga y el store lo rechaza en ifMatch.
+async function registryEtag() {
+  try {
+    const h = await head(REG_PATH);
+    return (h && h.etag) || null;
+  } catch (e) {
+    if (isNotFound(e)) return null;
     throw e;
   }
 }
@@ -67,21 +74,21 @@ async function readRegistry() {
 async function claimName(name, id) {
   const key = name.toLowerCase();
   for (let attempt = 0; attempt < 4; attempt++) {
-    const reg = await readRegistry();
-    if (reg.names[key] && reg.names[key] !== id) return false;
-    const names = { ...reg.names, [key]: id };
+    const names = await readRegistry();
+    if (names[key] && names[key] !== id) return false;
+    const etag = await registryEtag();
     try {
-      await put(REG_PATH, JSON.stringify(names), {
+      await put(REG_PATH, JSON.stringify({ ...names, [key]: id }), {
         access: "private",
         contentType: "application/json",
         addRandomSuffix: false,
         allowOverwrite: true,
-        ...(reg.etag ? { ifMatch: reg.etag } : {}),
+        ...(etag ? { ifMatch: etag } : {}),
       });
-      if (!reg.etag) {
+      if (!etag) {
         // bootstrap sin etag: verificar que no nos pisó una carrera
         const check = await readRegistry();
-        if (check.names[key] === id) return true;
+        if (check[key] === id) return true;
         continue;
       }
       return true;

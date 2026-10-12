@@ -3,7 +3,7 @@
 // Todo exige el secreto de la variable de entorno ADMIN_SECRET (header x-admin-secret).
 // Sin secreto configurado o inválido: 401. Nada sensible se cachea.
 const crypto = require("crypto");
-const { list, get, del, put } = require("@vercel/blob");
+const { list, get, del, put, head } = require("@vercel/blob");
 
 const validId = (id) => typeof id === "string" && /^[A-Za-z0-9_-]{6,64}$/.test(id);
 const pathOf = (id) => `spaces/${id}.json`;
@@ -62,24 +62,32 @@ async function releaseName(name) {
   if (!name) return;
   const key = name.toLowerCase();
   for (let attempt = 0; attempt < 4; attempt++) {
-    let reg;
+    let names;
     try {
       const r = await readJson(REG_PATH);
-      reg = { names: r.data && typeof r.data === "object" && !Array.isArray(r.data) ? r.data : {}, etag: r.etag };
+      names = r.data && typeof r.data === "object" && !Array.isArray(r.data) ? r.data : {};
     } catch (e) {
       if (isNotFound(e)) return;
       throw e;
     }
-    if (!reg.names[key]) return;
-    const names = { ...reg.names };
-    delete names[key];
+    if (!names[key]) return;
+    let etag = null;
     try {
-      await put(REG_PATH, JSON.stringify(names), {
+      const h = await head(REG_PATH);
+      etag = (h && h.etag) || null;
+    } catch (e) {
+      if (isNotFound(e)) return;
+      throw e;
+    }
+    const next = { ...names };
+    delete next[key];
+    try {
+      await put(REG_PATH, JSON.stringify(next), {
         access: "private",
         contentType: "application/json",
         addRandomSuffix: false,
         allowOverwrite: true,
-        ...(reg.etag ? { ifMatch: reg.etag } : {}),
+        ...(etag ? { ifMatch: etag } : {}),
       });
       return;
     } catch (e) {
