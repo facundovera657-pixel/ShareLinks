@@ -3,11 +3,10 @@
 // Todo exige el secreto de la variable de entorno ADMIN_SECRET (header x-admin-secret).
 // Sin secreto configurado o inválido: 401. Nada sensible se cachea.
 const crypto = require("crypto");
-const { list, get, del, put, head } = require("@vercel/blob");
+const { list, get, del } = require("@vercel/blob");
 
 const validId = (id) => typeof id === "string" && /^[A-Za-z0-9_-]{6,64}$/.test(id);
 const pathOf = (id) => `spaces/${id}.json`;
-const REG_PATH = "registry/names.json";
 
 function authed(req) {
   const s = process.env.ADMIN_SECRET;
@@ -22,20 +21,6 @@ function authed(req) {
 function isNotFound(e) {
   return !!e && (e.name === "BlobNotFoundError" || e.code === "BlobNotFoundError" || e.statusCode === 404);
 }
-function isPrecond(e) {
-  return !!e && (
-    e.name === "BlobPreconditionFailedError" || e.code === "BlobPreconditionFailedError" || e.statusCode === 412 ||
-    (e.name === "BlobError" && /conflicting operation/i.test(e.message || ""))
-  );
-}
-function isTransient(e) {
-  return !!e && (
-    e.name === "BlobServiceRateLimited" || e.code === "rate_limited" ||
-    e.name === "BlobServiceNotAvailable" || e.code === "service_unavailable" ||
-    e.code === "unknown_error" || e.statusCode === 429 || e.statusCode === 503
-  );
-}
-const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function readJson(pathname) {
   const res = await get(pathname, { access: "private", useCache: false });
@@ -68,47 +53,12 @@ async function readStore(id) {
   }
 }
 
-// Quita el nombre del registro (reintenta ante carreras). No falla si no estaba.
+// Libera el nombre borrando su reclamo (del no falla si no existe).
 async function releaseName(name) {
   if (!name) return;
-  const key = name.toLowerCase();
-  for (let attempt = 0; attempt < 6; attempt++) {
-    let names;
-    try {
-      const r = await readJson(REG_PATH);
-      names = r.data && typeof r.data === "object" && !Array.isArray(r.data) ? r.data : {};
-    } catch (e) {
-      if (isNotFound(e)) return;
-      if (isTransient(e) && attempt < 5) { await sleep(150 * (attempt + 1)); continue; }
-      throw e;
-    }
-    if (!names[key]) return;
-    let etag = null;
-    try {
-      const h = await head(REG_PATH);
-      etag = (h && h.etag) || null;
-    } catch (e) {
-      if (isNotFound(e)) return;
-      if (isTransient(e) && attempt < 5) { await sleep(150 * (attempt + 1)); continue; }
-      throw e;
-    }
-    const next = { ...names };
-    delete next[key];
-    try {
-      await put(REG_PATH, JSON.stringify(next), {
-        access: "private",
-        contentType: "application/json",
-        addRandomSuffix: false,
-        allowOverwrite: true,
-        ...(etag ? { ifMatch: etag } : {}),
-      });
-      return;
-    } catch (e) {
-      if (isPrecond(e)) continue;
-      if (isTransient(e) && attempt < 5) { await sleep(150 * (attempt + 1)); continue; }
-      throw e;
-    }
-  }
+  try {
+    await del(`names/${crypto.createHash("sha256").update(name.toLowerCase()).digest("hex")}.json`);
+  } catch {}
 }
 
 module.exports = async function handler(req, res) {

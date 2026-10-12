@@ -2,7 +2,7 @@
 // API propia de ShareLinks — guarda los links de cada espacio (ID) en Vercel Blob.
 // Sin cuentas: quien conoce el ID puede leer/escribir ese espacio.
 const crypto = require("crypto");
-const { put, get, del, head } = require("@vercel/blob");
+const { put, get, del } = require("@vercel/blob");
 const { validName } = require("../sync.js");
 
 const validId = (id) => typeof id === "string" && /^[A-Za-z0-9_-]{6,64}$/.test(id);
@@ -36,13 +36,6 @@ function cleanLinks(v) {
 function isNotFound(e) {
   return !!e && (e.name === "BlobNotFoundError" || e.code === "BlobNotFoundError" || e.statusCode === 404);
 }
-function isPrecond(e) {
-  return !!e && (
-    e.name === "BlobPreconditionFailedError" || e.code === "BlobPreconditionFailedError" || e.statusCode === 412 ||
-    // el store también rechaza escrituras condicionales concurrentes con este error
-    (e.name === "BlobError" && /conflicting operation/i.test(e.message || ""))
-  );
-}
 // Errores transitorios del storage: ameritan reintento con espera.
 function isTransient(e) {
   return !!e && (
@@ -53,30 +46,22 @@ function isTransient(e) {
 }
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-// Registro global nombre → id (minúsculas) para unicidad. Escritura condicional anti-carreras.
-const REG_PATH = "registry/names.json";
-async function readRegistry() {
+// Unicidad de nombres por archivo determinista: crear names/<hash>.json SIN
+// sobrescritura es atómico — si ya existe, el store lo rechaza y el nombre está en uso.
+// (El registro + ETag condicional no serializa escrituras concurrentes: probado en vivo.)
+const namePath = (name) => `names/${crypto.createHash("sha256").update(name.toLowerCase()).digest("hex")}.json`;
+
+async function readClaimId(name) {
   try {
-    const res = await get(REG_PATH, { access: "private", useCache: false });
-    if (!res || res.statusCode !== 200 || !res.stream) return {};
+    const res = await get(namePath(name), { access: "private", useCache: false });
+    if (!res || res.statusCode !== 200 || !res.stream) return null;
     let data = null;
     try {
       data = JSON.parse(await new Response(res.stream).text());
     } catch {
-      data = null;
+      return null;
     }
-    return data && typeof data === "object" && !Array.isArray(data) ? data : {};
-  } catch (e) {
-    if (isNotFound(e)) return {};
-    throw e;
-  }
-}
-
-// ETag canónico vía head(): el de get() viene del header de descarga y el store lo rechaza en ifMatch.
-async function registryEtag() {
-  try {
-    const h = await head(REG_PATH);
-    return (h && h.etag) || null;
+    return data && typeof data.id === "string" ? data.id : null;
   } catch (e) {
     if (isNotFound(e)) return null;
     throw e;
@@ -85,45 +70,49 @@ async function registryEtag() {
 
 // Reserva el nombre para id. true = reservado, false = en uso. Lanza ante errores reales.
 async function claimName(name, id) {
-  const key = name.toLowerCase();
-  for (let attempt = 0; attempt < 6; attempt++) {
-    let names;
+  for (let attempt = 0; attempt < 3; attempt++) {
     try {
-      names = await readRegistry();
-    } catch (e) {
-      if (isTransient(e) && attempt < 5) { await sleep(150 * (attempt + 1)); continue; }
-      throw e;
-    }
-    if (names[key] && names[key] !== id) return false;
-    let etag = null;
-    try {
-      etag = await registryEtag();
-    } catch (e) {
-      if (isTransient(e) && attempt < 5) { await sleep(150 * (attempt + 1)); continue; }
-      throw e;
-    }
-    try {
-      await put(REG_PATH, JSON.stringify({ ...names, [key]: id }), {
+      await put(namePath(name), JSON.stringify({ id }), {
         access: "private",
         contentType: "application/json",
         addRandomSuffix: false,
-        allowOverwrite: true,
-        ...(etag ? { ifMatch: etag } : {}),
       });
-      if (!etag) {
-        // bootstrap sin etag: verificar que no nos pisó una carrera
-        const check = await readRegistry();
-        if (check[key] === id) return true;
-        continue;
-      }
       return true;
     } catch (e) {
-      if (isPrecond(e)) continue; // otro escribió a la vez: releer y reintentar
-      if (isTransient(e) && attempt < 5) { await sleep(150 * (attempt + 1)); continue; }
+      if (isTransient(e) && attempt < 2) { await sleep(200 * (attempt + 1)); continue; }
+      // ¿El put falló pero otro ganó (o el nuestro sí aplicó)? La lectura decide.
+      let owner = null;
+      try {
+        owner = await readClaimId(name);
+      } catch {
+        owner = null;
+      }
+      if (owner === id) return true;
+      if (owner && owner !== id) {
+        if (attempt < 2) { await sleep(300); continue; } // posible lag de borrado: reintentar
+        return false;
+      }
       throw e;
     }
   }
   return false;
+}
+
+async function putSpace(id, store) {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      await put(pathOf(id), JSON.stringify(store), {
+        access: "private",
+        contentType: "application/json",
+        addRandomSuffix: false,
+        allowOverwrite: true,
+      });
+      return;
+    } catch (e) {
+      if (isTransient(e) && attempt < 2) { await sleep(200 * (attempt + 1)); continue; }
+      throw e;
+    }
+  }
 }
 
 // Sanea tombstones {linkId: ts}: claves válidas, ts numéricos, tope y poda >30 días.
@@ -196,11 +185,7 @@ module.exports = async function handler(req, res) {
       const cleaned = cleanState(req.body) || { links: [], tombstones: {} };
       const store = { links: cleaned.links, tombstones: cleaned.tombstones, name, created: Date.now() };
       const id = newId();
-      await put(pathOf(id), JSON.stringify(store), {
-        access: "private",
-        contentType: "application/json",
-        addRandomSuffix: false,
-      });
+      await putSpace(id, store);
       let claimed = false;
       try {
         claimed = await claimName(name, id);
@@ -243,12 +228,7 @@ module.exports = async function handler(req, res) {
         name: typeof found.store.name === "string" ? found.store.name : "",
         created: Number.isFinite(found.store.created) ? found.store.created : Date.now(),
       };
-      await put(pathOf(id), JSON.stringify(store), {
-        access: "private",
-        contentType: "application/json",
-        addRandomSuffix: false,
-        allowOverwrite: true,
-      });
+      await putSpace(id, store);
       return res.status(200).json({ ok: true });
     }
 
