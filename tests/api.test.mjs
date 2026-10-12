@@ -453,9 +453,17 @@ describeAdmin("admin /api/admin (requiere ADMIN_SECRET)", () => {
     assert.equal(c.status, 200);
     const id = c.json.id;
 
-    const l = await admin("GET", "?action=list&limit=200");
-    assert.equal(l.status, 200);
-    assert.ok(l.json.spaces.some((s) => s.id === id && s.name === name && s.links === 1));
+    const l0 = await admin("GET", "?action=list&limit=200");
+    assert.equal(l0.status, 200);
+    let found = l0.json.spaces.find((s) => s.id === id);
+    let cur = l0.json.hasMore ? l0.json.cursor : null;
+    for (let p = 0; p < 10 && !found && cur; p++) {
+      const lp = await admin("GET", "?action=list&limit=200&cursor=" + encodeURIComponent(cur));
+      assert.equal(lp.status, 200);
+      found = lp.json.spaces.find((s) => s.id === id);
+      cur = lp.json.hasMore ? lp.json.cursor : null;
+    }
+    assert.ok(found && found.name === name && found.links === 1);
 
     const r = await admin("GET", `?action=read&id=${id}`);
     assert.equal(r.status, 200);

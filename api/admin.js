@@ -25,6 +25,14 @@ function isNotFound(e) {
 function isPrecond(e) {
   return !!e && (e.name === "BlobPreconditionFailedError" || e.code === "BlobPreconditionFailedError" || e.statusCode === 412);
 }
+function isTransient(e) {
+  return !!e && (
+    e.name === "BlobServiceRateLimited" || e.code === "rate_limited" ||
+    e.name === "BlobServiceNotAvailable" || e.code === "service_unavailable" ||
+    e.code === "unknown_error" || e.statusCode === 429 || e.statusCode === 503
+  );
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 async function readJson(pathname) {
   const res = await get(pathname, { access: "private", useCache: false });
@@ -61,13 +69,14 @@ async function readStore(id) {
 async function releaseName(name) {
   if (!name) return;
   const key = name.toLowerCase();
-  for (let attempt = 0; attempt < 4; attempt++) {
+  for (let attempt = 0; attempt < 6; attempt++) {
     let names;
     try {
       const r = await readJson(REG_PATH);
       names = r.data && typeof r.data === "object" && !Array.isArray(r.data) ? r.data : {};
     } catch (e) {
       if (isNotFound(e)) return;
+      if (isTransient(e) && attempt < 5) { await sleep(150 * (attempt + 1)); continue; }
       throw e;
     }
     if (!names[key]) return;
@@ -77,6 +86,7 @@ async function releaseName(name) {
       etag = (h && h.etag) || null;
     } catch (e) {
       if (isNotFound(e)) return;
+      if (isTransient(e) && attempt < 5) { await sleep(150 * (attempt + 1)); continue; }
       throw e;
     }
     const next = { ...names };
@@ -92,6 +102,7 @@ async function releaseName(name) {
       return;
     } catch (e) {
       if (isPrecond(e)) continue;
+      if (isTransient(e) && attempt < 5) { await sleep(150 * (attempt + 1)); continue; }
       throw e;
     }
   }

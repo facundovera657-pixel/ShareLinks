@@ -39,6 +39,15 @@ function isNotFound(e) {
 function isPrecond(e) {
   return !!e && (e.name === "BlobPreconditionFailedError" || e.code === "BlobPreconditionFailedError" || e.statusCode === 412);
 }
+// Errores transitorios del storage: ameritan reintento con espera.
+function isTransient(e) {
+  return !!e && (
+    e.name === "BlobServiceRateLimited" || e.code === "rate_limited" ||
+    e.name === "BlobServiceNotAvailable" || e.code === "service_unavailable" ||
+    e.code === "unknown_error" || e.statusCode === 429 || e.statusCode === 503
+  );
+}
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
 // Registro global nombre → id (minúsculas) para unicidad. Escritura condicional anti-carreras.
 const REG_PATH = "registry/names.json";
@@ -73,10 +82,22 @@ async function registryEtag() {
 // Reserva el nombre para id. true = reservado, false = en uso. Lanza ante errores reales.
 async function claimName(name, id) {
   const key = name.toLowerCase();
-  for (let attempt = 0; attempt < 4; attempt++) {
-    const names = await readRegistry();
+  for (let attempt = 0; attempt < 6; attempt++) {
+    let names;
+    try {
+      names = await readRegistry();
+    } catch (e) {
+      if (isTransient(e) && attempt < 5) { await sleep(150 * (attempt + 1)); continue; }
+      throw e;
+    }
     if (names[key] && names[key] !== id) return false;
-    const etag = await registryEtag();
+    let etag = null;
+    try {
+      etag = await registryEtag();
+    } catch (e) {
+      if (isTransient(e) && attempt < 5) { await sleep(150 * (attempt + 1)); continue; }
+      throw e;
+    }
     try {
       await put(REG_PATH, JSON.stringify({ ...names, [key]: id }), {
         access: "private",
@@ -94,6 +115,7 @@ async function claimName(name, id) {
       return true;
     } catch (e) {
       if (isPrecond(e)) continue; // otro escribió a la vez: releer y reintentar
+      if (isTransient(e) && attempt < 5) { await sleep(150 * (attempt + 1)); continue; }
       throw e;
     }
   }
