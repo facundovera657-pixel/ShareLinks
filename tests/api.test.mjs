@@ -17,6 +17,8 @@ vm.runInContext(syncSrc, sandbox);
 const { mergeStores, sameStore, normStore } = sandbox;
 assert.equal(typeof mergeStores, "function");
 assert.equal(typeof sameStore, "function");
+// structuredClone trae valores del sandbox vm al realm actual (evita choques de prototipo en deepEqual)
+const dc = (v) => structuredClone(v);
 
 async function req(method, path = "", body) {
   const r = await fetch(API + path, {
@@ -154,7 +156,7 @@ describe("API /api/space", () => {
     // dispositivo 2 tenía todo y sincroniza
     const cloud = (await req("GET", `?id=${c.id}`)).json;
     const dev2 = mergeStores({ links: [A, B], tombstones: {} }, cloud);
-    assert.deepEqual(dev2.links.map((l) => l.id), [B.id]);
+    assert.deepEqual(dc(dev2.links.map((l) => l.id)), [B.id]);
     // dispositivo 2 re-sube y A sigue borrado (no resucita)
     await req("PUT", `?id=${c.id}`, dev2);
     const g = await req("GET", `?id=${c.id}`);
@@ -166,26 +168,26 @@ describe("API /api/space", () => {
     const { json: c } = await req("POST", "", { links: [A] });
     const cloud = (await req("GET", `?id=${c.id}`)).json;
     const merged = mergeStores({ links: [B], tombstones: {} }, cloud);
-    assert.deepEqual(merged.links.map((l) => l.id).sort(), [A.id, B.id].sort());
+    assert.deepEqual(dc(merged.links.map((l) => l.id)).sort(), [A.id, B.id].sort());
   });
 });
 
 describe("mergeStores (unitario)", () => {
   test("normStore migra array legacy y basura", () => {
-    assert.deepEqual(normStore([{ id: "a" }, null, 42]), { links: [{ id: "a" }], tombstones: {} });
-    assert.deepEqual(normStore(null), { links: [], tombstones: {} });
-    assert.deepEqual(normStore({}), { links: [], tombstones: {} });
+    assert.deepEqual(dc(normStore([{ id: "a" }, null, 42])), { links: [{ id: "a" }], tombstones: {} });
+    assert.deepEqual(dc(normStore(null)), { links: [], tombstones: {} });
+    assert.deepEqual(dc(normStore({})), { links: [], tombstones: {} });
   });
 
   test("gana el link más reciente y el borrado posterior elimina", () => {
     const old = { id: "x", url: "https://a.com", ts: 100 };
     const neu = { id: "x", url: "https://b.com", ts: 200 };
-    assert.deepEqual(mergeStores({ links: [old], tombstones: {} }, { links: [neu], tombstones: {} }).links, [neu]);
+    assert.deepEqual(dc(mergeStores({ links: [old], tombstones: {} }, { links: [neu], tombstones: {} }).links), [neu]);
     const m = mergeStores({ links: [neu], tombstones: {} }, { links: [], tombstones: { x: 300 } });
-    assert.deepEqual(m.links, []);
+    assert.deepEqual(dc(m.links), []);
     // borrado anterior al link no lo elimina
     const m2 = mergeStores({ links: [], tombstones: { x: 50 } }, { links: [neu], tombstones: {} });
-    assert.deepEqual(m2.links, [neu]);
+    assert.deepEqual(dc(m2.links), [neu]);
   });
 
   test("sameStore ignora el orden", () => {
