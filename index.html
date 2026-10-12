@@ -49,6 +49,8 @@
   .hint{font-size:13px;color:var(--mut);margin:8px 0 0;line-height:1.5}
   .idbox{display:flex;align-items:center;gap:8px;background:#0c0e12;border:1px dashed #334052;border-radius:11px;padding:10px 12px;margin-top:10px}
   .idbox code{font-size:18px;letter-spacing:.12em;flex:1;overflow:hidden;text-overflow:ellipsis}
+  .spacename{font-size:14px;color:var(--mut)}
+  .spacename b{color:var(--txt)}
   .qr{text-align:center;margin-top:10px;display:none}
   .qrimg{background:#fff;border-radius:12px;padding:8px;display:inline-block;line-height:0}
   .qrimg svg{width:170px;height:170px;display:block}
@@ -92,6 +94,9 @@
   <section class="card" id="spaceCard">
     <h2>1 · Tu espacio (ID)</h2>
     <div id="noSpace">
+      <label for="inName">Nombre del espacio (obligatorio)</label>
+      <input id="inName" placeholder="Ej: Casa, Trabajo" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="next" maxlength="12" />
+      <p class="hint" style="margin-top:6px">De 5 a 12 letras, sin números ni espacios.</p>
       <label for="inId">Entrar con un ID existente</label>
       <input id="inId" placeholder="Ej: a3f9c2…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go" maxlength="64" />
       <div class="row2" style="margin-top:10px">
@@ -101,6 +106,7 @@
       <p class="hint">En la PC pulsa <b>Crear mi espacio</b>. Te da un ID. En el celular abres esta misma página e ingresas ese ID. Listo, ves los mismos links.</p>
     </div>
     <div id="yesSpace" style="display:none">
+      <div class="spacename">Espacio: <b id="spaceName">—</b></div>
       <div class="idbox"><code id="myId">—</code><button class="ghost" id="btnCopyId" style="padding:8px 12px;font-size:13px">Copiar</button></div>
       <div class="row2" style="margin-top:10px">
         <button class="ghost" id="btnSync">↻ Sincronizar</button>
@@ -145,15 +151,18 @@
 const LS_ID = "sl_space_id";
 const lsLinksKey = (id) => "sl_links_" + (id || "local");
 const loadStore = (id) => {
+  const blank = { links: [], tombstones: {}, name: "", created: 0 };
   try {
     const raw = JSON.parse(localStorage.getItem(lsLinksKey(id)) || "null");
-    if (!raw) return { links: [], tombstones: {} };
-    if (Array.isArray(raw)) return { links: raw, tombstones: {} };
+    if (!raw) return blank;
+    if (Array.isArray(raw)) return { links: raw, tombstones: {}, name: "", created: 0 };
     return {
       links: Array.isArray(raw.links) ? raw.links : [],
       tombstones: raw.tombstones && typeof raw.tombstones === "object" ? raw.tombstones : {},
+      name: typeof raw.name === "string" ? raw.name : "",
+      created: Number.isFinite(raw.created) ? raw.created : 0,
     };
-  } catch { return { links: [], tombstones: {} }; }
+  } catch { return blank; }
 };
 const saveStore = (id, store) => { try { localStorage.setItem(lsLinksKey(id), JSON.stringify(store)); } catch {} };
 
@@ -172,10 +181,12 @@ async function cloudGet(id) {
   if (r.status === 404) throw new Error("Ese ID no existe. Revisá mayúsculas y minúsculas, o creá un espacio nuevo.");
   if (!r.ok) throw new Error("No se pudo leer (HTTP " + r.status + ")");
   const data = await r.json();
-  if (Array.isArray(data)) return { links: data, tombstones: {} };
+  if (Array.isArray(data)) return { links: data, tombstones: {}, name: "", created: 0 };
   return {
     links: Array.isArray(data.links) ? data.links : [],
     tombstones: data.tombstones && typeof data.tombstones === "object" ? data.tombstones : {},
+    name: typeof data.name === "string" ? data.name : "",
+    created: Number.isFinite(data.created) ? data.created : 0,
   };
 }
 async function cloudPut(id, store) {
@@ -259,9 +270,11 @@ function renderSpace() {
   const has = !!spaceId;
   $("noSpace").style.display = has ? "none" : "block";
   $("yesSpace").style.display = has ? "block" : "none";
-  pill.textContent = has ? "● nube · " + spaceId.slice(0, 8) : "● local";
+  const label = store.name || spaceId.slice(0, 8);
+  pill.textContent = has ? "● nube · " + label : "● local";
   pill.classList.toggle("on", has);
   if (!has) { lastQrId = ""; return; }
+  $("spaceName").textContent = store.name || "(sin nombre)";
   $("myId").textContent = spaceId;
   $("qrBox").style.display = "block";
   if (spaceId === lastQrId) return; // el QR solo se regenera si cambió el ID
@@ -301,7 +314,12 @@ async function pull() {
     const cloud = await cloudGet(spaceId);
     const merged = mergeStores(store, cloud);
     const changed = !sameStore(merged, cloud);
-    store = merged;
+    store = {
+      links: merged.links,
+      tombstones: merged.tombstones,
+      name: cloud.name || store.name || "",
+      created: cloud.created || store.created || 0,
+    };
     saveStore(spaceId, store); render();
     if (changed) schedulePush(); // converge borrados y fusiones en la nube
     else setStatus(spaceStatus, "Sincronizado ✓ · " + store.links.length + " links", "ok");
@@ -325,9 +343,13 @@ $("btnAdd").onclick = async () => {
 $("inUrl").addEventListener("keydown", e => { if (e.key === "Enter") $("btnAdd").click(); });
 
 $("btnCreate").onclick = async () => {
+  const name = $("inName").value.trim();
+  if (!validName(name)) { setStatus(spaceStatus, "El nombre del espacio: de 5 a 12 letras, sin números ni espacios.", "err"); return; }
   setStatus(spaceStatus, "Creando tu espacio…");
   try {
-    const id = await cloudCreate(store);
+    const payload = { links: store.links, tombstones: store.tombstones, name };
+    const id = await cloudCreate(payload);
+    store.name = name;
     spaceId = id; localStorage.setItem(LS_ID, id);
     saveStore(id, store); render();
     setStatus(spaceStatus, "Espacio creado ✓. Usa este ID en tu celular.", "ok");
@@ -342,6 +364,7 @@ $("btnJoin").onclick = async () => {
   await pull(); // si el ID no existe, pull sale solo a modo local con aviso
 };
 $("inId").addEventListener("keydown", e => { if (e.key === "Enter") $("btnJoin").click(); });
+$("inName").addEventListener("keydown", e => { if (e.key === "Enter") $("inId").focus(); });
 $("btnSync").onclick = pull;
 $("btnExit").onclick = () => exitToLocal("Saliste del espacio. Estás en modo local.", "");
 $("btnCopyId").onclick = async (e) => {

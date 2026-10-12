@@ -58,6 +58,11 @@ function sameStore(a, b) {
 // Tope compartido cliente/servidor para URLs.
 var MAX_URL_LEN = 2048;
 
+// Nombre de espacio: obligatorio, 5 a 12 letras (acepta ñ/acentos), sin números ni espacios.
+function validName(n) {
+  return typeof n === "string" && /^[\p{L}]{5,12}$/u.test(n);
+}
+
 // Normaliza input de URL: primer token (pega multilínea), sin invisibles,
 // con esquema https:// por defecto y tope de largo. "" = inválida.
 function normUrl(u) {
@@ -77,4 +82,8 @@ function normUrl(u) {
 // Escape HTML para todo dato que se inserta en el DOM.
 function esc(s) {
   return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+if (typeof module !== "undefined" && module.exports) {
+  module.exports = { normStore, mergeStores, sameStore, normUrl, esc, validName, MAX_URL_LEN };
 }

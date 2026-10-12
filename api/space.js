@@ -3,6 +3,7 @@
 // Sin cuentas: quien conoce el ID puede leer/escribir ese espacio.
 const crypto = require("crypto");
 const { put, get } = require("@vercel/blob");
+const { validName } = require("../sync.js");
 
 const validId = (id) => typeof id === "string" && /^[A-Za-z0-9_-]{6,64}$/.test(id);
 const pathOf = (id) => `spaces/${id}.json`;
@@ -75,7 +76,7 @@ async function readStore(id) {
   }
   if (!res || res.statusCode !== 200 || !res.stream) return { status: "missing" };
   const data = JSON.parse(await new Response(res.stream).text());
-  if (Array.isArray(data)) return { status: "ok", store: { links: data, tombstones: {} } }; // formato legacy
+  if (Array.isArray(data)) return { status: "ok", store: { links: data, tombstones: {}, name: "", created: 0 } }; // formato legacy
   return {
     status: "ok",
     store: {
@@ -84,6 +85,8 @@ async function readStore(id) {
         data.tombstones && typeof data.tombstones === "object" && !Array.isArray(data.tombstones)
           ? data.tombstones
           : {},
+      name: typeof data.name === "string" ? data.name : "",
+      created: Number.isFinite(data.created) ? data.created : 0,
     },
   };
 }
@@ -95,9 +98,14 @@ module.exports = async function handler(req, res) {
   if (req.method === "OPTIONS") return res.status(200).end();
 
   try {
-    // Crear espacio
+    // Crear espacio (nombre obligatorio para control)
     if (req.method === "POST") {
-      const store = cleanState(req.body) || { links: [], tombstones: {} };
+      const name = req.body && req.body.name;
+      if (!validName(name)) {
+        return res.status(400).json({ error: "Nombre inválido: de 5 a 12 letras, sin números ni espacios." });
+      }
+      const cleaned = cleanState(req.body) || { links: [], tombstones: {} };
+      const store = { links: cleaned.links, tombstones: cleaned.tombstones, name, created: Date.now() };
       const id = newId();
       await put(pathOf(id), JSON.stringify(store), {
         access: "private",
@@ -114,15 +122,27 @@ module.exports = async function handler(req, res) {
     if (req.method === "GET") {
       const found = await readStore(id);
       if (found.status === "missing") return res.status(404).json({ error: "Ese ID no existe" });
-      return res.status(200).json(found.store);
+      const s = found.store;
+      return res.status(200).json({
+        links: s.links,
+        tombstones: s.tombstones,
+        name: typeof s.name === "string" ? s.name : "",
+        created: Number.isFinite(s.created) ? s.created : 0,
+      });
     }
 
-    // Guardar espacio
+    // Guardar espacio (nombre y fecha inmutables: manda lo guardado)
     if (req.method === "PUT") {
-      const store = cleanState(req.body);
-      if (!store) return res.status(400).json({ error: "links inválido" });
+      const cleaned = cleanState(req.body);
+      if (!cleaned) return res.status(400).json({ error: "links inválido" });
       const found = await readStore(id);
       if (found.status === "missing") return res.status(404).json({ error: "Ese ID no existe" });
+      const store = {
+        links: cleaned.links,
+        tombstones: cleaned.tombstones,
+        name: typeof found.store.name === "string" ? found.store.name : "",
+        created: Number.isFinite(found.store.created) ? found.store.created : Date.now(),
+      };
       await put(pathOf(id), JSON.stringify(store), {
         access: "private",
         contentType: "application/json",

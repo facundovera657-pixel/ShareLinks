@@ -15,11 +15,12 @@ const sandbox = {};
 vm.createContext(sandbox);
 sandbox.URL = URL; // el contexto vm no trae globales WHATWG; normUrl lo necesita
 vm.runInContext(syncSrc, sandbox);
-const { mergeStores, sameStore, normStore, normUrl, esc } = sandbox;
+const { mergeStores, sameStore, normStore, normUrl, esc, validName } = sandbox;
 assert.equal(typeof mergeStores, "function");
 assert.equal(typeof sameStore, "function");
 assert.equal(typeof normUrl, "function");
 assert.equal(typeof esc, "function");
+assert.equal(typeof validName, "function");
 // structuredClone trae valores del sandbox vm al realm actual (evita choques de prototipo en deepEqual)
 const dc = (v) => structuredClone(v);
 
@@ -34,10 +35,12 @@ async function req(method, path = "", body) {
   return { status: r.status, json, headers: r.headers };
 }
 const mkLink = (i) => ({ id: `t${Date.now().toString(36)}${i}`, url: `https://ejemplo.com/p${i}`, ts: Date.now() });
+const TNAME = "Pruebas";
+const mkSpace = (links) => ({ links, name: TNAME });
 
 describe("API /api/space", () => {
   test("POST crea espacio y devuelve ID válido", async () => {
-    const { status, json } = await req("POST", "", { links: [] });
+    const { status, json } = await req("POST", "", mkSpace([]));
     assert.equal(status, 200);
     assert.match(json.id, ID_RE);
   });
@@ -45,14 +48,14 @@ describe("API /api/space", () => {
   test("IDs generados son únicos", async () => {
     const ids = new Set();
     for (let i = 0; i < 5; i++) {
-      const { json } = await req("POST", "", { links: [] });
+      const { json } = await req("POST", "", mkSpace([]));
       ids.add(json.id);
     }
     assert.equal(ids.size, 5);
   });
 
   test("ciclo completo: crear → leer vacío → guardar → leer con datos", async () => {
-    const { json: c } = await req("POST", "", { links: [] });
+    const { json: c } = await req("POST", "", mkSpace([]));
     const g1 = await req("GET", `?id=${c.id}`);
     assert.equal(g1.status, 200);
     assert.deepEqual(g1.json.links, []);
@@ -73,7 +76,7 @@ describe("API /api/space", () => {
   });
 
   test("PUT sobrescribe (last-write-wins)", async () => {
-    const { json: c } = await req("POST", "", { links: [mkLink(1)] });
+    const { json: c } = await req("POST", "", mkSpace([mkLink(1)]));
     const v2 = [mkLink(2)];
     await req("PUT", `?id=${c.id}`, { links: v2 });
     const g = await req("GET", `?id=${c.id}`);
@@ -106,7 +109,7 @@ describe("API /api/space", () => {
   });
 
   test("PUT con body inválido → 400; array solo-basura → 200 con []", async () => {
-    const { json: c } = await req("POST", "", { links: [] });
+    const { json: c } = await req("POST", "", mkSpace([]));
     for (const body of [{}, { links: "x" }, { links: null }]) {
       const { status } = await req("PUT", `?id=${c.id}`, body);
       assert.equal(status, 400, JSON.stringify(body));
@@ -118,7 +121,7 @@ describe("API /api/space", () => {
   });
 
   test("PUT sanea items malformados en vez de romper", async () => {
-    const { json: c } = await req("POST", "", { links: [] });
+    const { json: c } = await req("POST", "", mkSpace([]));
     const good = mkLink(9);
     const p = await req("PUT", `?id=${c.id}`, {
       links: [null, 42, {}, { id: "x", url: "javascript:alert(1)" }, { id: good.id, url: "notaurl" }, good],
@@ -130,14 +133,39 @@ describe("API /api/space", () => {
 
   test("IDs nuevos evitan caracteres ambiguos (0/O/1/l/I)", async () => {
     for (let i = 0; i < 3; i++) {
-      const { json } = await req("POST", "", { links: [] });
+      const { json } = await req("POST", "", mkSpace([]));
       assert.match(json.id, ID_RE);
       assert.doesNotMatch(json.id, /[01lIO]/);
     }
   });
 
+  test("POST exige nombre: 5-12 letras, sin números ni espacios", async () => {
+    for (const name of [undefined, "", "abc", "abcd", "abcdefghijklm", "casa1", "mi casa", "casa!", "12345", 42, null]) {
+      const { status, json } = await req("POST", "", { links: [], name });
+      assert.equal(status, 400, `esperaba 400 para ${JSON.stringify(name)}`);
+      assert.ok(json.error);
+    }
+    for (const name of ["abcde", "Pruebas", "DoceLetrasXX", "Ñandú", "München"]) {
+      const { status, json } = await req("POST", "", { links: [], name });
+      assert.equal(status, 200, `esperaba 200 para ${name}`);
+      assert.match(json.id, ID_RE);
+    }
+  });
+
+  test("GET devuelve nombre y fecha; PUT no los cambia", async () => {
+    const { json: c } = await req("POST", "", mkSpace([mkLink(1)]));
+    const g = await req("GET", `?id=${c.id}`);
+    assert.equal(g.json.name, TNAME);
+    assert.ok(Number.isFinite(g.json.created) && g.json.created > 0);
+    const p = await req("PUT", `?id=${c.id}`, { links: [], tombstones: {}, name: "OtroNombre", created: 1 });
+    assert.equal(p.status, 200);
+    const g2 = await req("GET", `?id=${c.id}`);
+    assert.equal(g2.json.name, TNAME);
+    assert.equal(g2.json.created, g.json.created);
+  });
+
   test("tombstones viajan en PUT/GET y se sanean", async () => {
-    const { json: c } = await req("POST", "", { links: [] });
+    const { json: c } = await req("POST", "", mkSpace([]));
     const link = mkLink(1);
     const tomb = { [link.id]: Date.now(), mala: "x", ["__proto__"]: 123, corta: 1 };
     const p = await req("PUT", `?id=${c.id}`, { links: [], tombstones: { ...tomb, [link.id]: tomb[link.id] } });
@@ -150,7 +178,7 @@ describe("API /api/space", () => {
 
   test("borrado se propaga entre dos dispositivos (tombstones)", async () => {
     const A = mkLink(1), B = mkLink(2);
-    const { json: c } = await req("POST", "", { links: [A, B] });
+    const { json: c } = await req("POST", "", mkSpace([A, B]));
     // dispositivo 1 borra A
     const dev1 = mergeStores({ links: [A, B], tombstones: {} }, { links: [A, B], tombstones: {} });
     dev1.links = dev1.links.filter((l) => l.id !== A.id);
@@ -168,21 +196,21 @@ describe("API /api/space", () => {
 
   test("link agregado offline sobrevive al pull (fusión)", async () => {
     const A = mkLink(1), B = mkLink(2);
-    const { json: c } = await req("POST", "", { links: [A] });
+    const { json: c } = await req("POST", "", mkSpace([A]));
     const cloud = (await req("GET", `?id=${c.id}`)).json;
     const merged = mergeStores({ links: [B], tombstones: {} }, cloud);
     assert.deepEqual(dc(merged.links.map((l) => l.id)).sort(), [A.id, B.id].sort());
   });
 
   test("servidor normaliza URL multilínea al primer token", async () => {
-    const { json: c } = await req("POST", "", { links: [] });
+    const { json: c } = await req("POST", "", mkSpace([]));
     await req("PUT", `?id=${c.id}`, { links: [{ id: "n", url: "https://a.com\nhttps://evil.com", ts: 1 }] });
     const g = await req("GET", `?id=${c.id}`);
     assert.deepEqual(g.json.links, [{ id: "n", url: "https://a.com", ts: 1 }]);
   });
 
   test("servidor trunca URL gigante a 2048", async () => {
-    const { json: c } = await req("POST", "", { links: [] });
+    const { json: c } = await req("POST", "", mkSpace([]));
     await req("PUT", `?id=${c.id}`, { links: [{ id: "big", url: "https://a.com/" + "x".repeat(100000), ts: 1 }] });
     const g = await req("GET", `?id=${c.id}`);
     assert.equal(g.json.links.length, 1);
@@ -232,6 +260,15 @@ describe("inputs: normUrl y esc (unitario)", () => {
     assert.equal(esc('"onmouseover="x'), "&quot;onmouseover=&quot;x");
     assert.equal(esc("a'b&c"), "a&#39;b&amp;c");
   });
+
+  test("validName: 5-12 letras, sin números ni espacios", () => {
+    for (const n of ["abcde", "Pruebas", "DoceLetrasXX", "Ñandú", "München", "abcdefghijkl"]) {
+      assert.ok(validName(n), `esperaba válido: ${n}`);
+    }
+    for (const n of ["", "abcd", "abcdefghijklm", "casa1", "mi casa", "casa!", "12345", " casa", "casa ", null, 42, undefined]) {
+      assert.ok(!validName(n), `esperaba inválido: ${JSON.stringify(n)}`);
+    }
+  });
 });
 
 describe("mergeStores (unitario)", () => {
@@ -271,10 +308,12 @@ describe("frontend y PWA", () => {
     assert.match(html, /navigator\.share/);
     assert.match(html, /src="\/vendor\/qrcode\.min\.js"/);
     assert.match(html, /src="\/sync\.js"/);
+    assert.match(html, /id="inName"/);
+    assert.match(html, /5 a 12 letras/);
     assert.match(html, /autocapitalize="off"/);
     assert.match(html, /enterkeyhint="go"/);
     assert.match(html, /enterkeyhint="send"/);
-    assert.equal((html.match(/addEventListener\("keydown"/g) || []).length, 2); // Enter en ID y en URL
+    assert.equal((html.match(/addEventListener\("keydown"/g) || []).length, 3); // Enter en nombre, ID y URL
     assert.match(html, /execCommand\("copy"\)/); // fallback de copiado
     assert.match(html, /copyText\(item\.url\)/);
     assert.doesNotMatch(html, /qrserver/);
