@@ -309,6 +309,8 @@ describe("frontend y PWA", () => {
     assert.match(html, /src="\/vendor\/qrcode\.min\.js"/);
     assert.match(html, /src="\/sync\.js"/);
     assert.match(html, /id="inName"/);
+    assert.match(html, /id="createForm"/);
+    assert.match(html, /id="btnDoCreate"/);
     assert.match(html, /5 a 12 letras/);
     assert.match(html, /autocapitalize="off"/);
     assert.match(html, /enterkeyhint="go"/);

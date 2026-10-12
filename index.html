@@ -94,14 +94,20 @@
   <section class="card" id="spaceCard">
     <h2>1 · Tu espacio (ID)</h2>
     <div id="noSpace">
-      <label for="inName">Nombre del espacio (obligatorio)</label>
-      <input id="inName" placeholder="Ej: Casa, Trabajo" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="next" maxlength="12" />
-      <p class="hint" style="margin-top:6px">De 5 a 12 letras, sin números ni espacios.</p>
       <label for="inId">Entrar con un ID existente</label>
       <input id="inId" placeholder="Ej: a3f9c2…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go" maxlength="64" />
       <div class="row2" style="margin-top:10px">
         <button class="ghost" id="btnJoin">Entrar</button>
         <button class="btn" id="btnCreate">Crear mi espacio</button>
+      </div>
+      <div id="createForm" style="display:none;margin-top:12px">
+        <label for="inName">Nombre del espacio (obligatorio)</label>
+        <input id="inName" placeholder="Ej: Casa, Trabajo" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="send" maxlength="12" />
+        <p class="hint" style="margin-top:6px">De 5 a 12 letras, sin números ni espacios.</p>
+        <div class="row2" style="margin-top:10px">
+          <button class="ghost" id="btnCancelCreate">Cancelar</button>
+          <button class="btn" id="btnDoCreate">Confirmar</button>
+        </div>
       </div>
       <p class="hint">En la PC pulsa <b>Crear mi espacio</b>. Te da un ID. En el celular abres esta misma página e ingresas ese ID. Listo, ves los mismos links.</p>
     </div>
@@ -342,7 +348,14 @@ $("btnAdd").onclick = async () => {
 };
 $("inUrl").addEventListener("keydown", e => { if (e.key === "Enter") $("btnAdd").click(); });
 
-$("btnCreate").onclick = async () => {
+$("btnCreate").onclick = () => {
+  const f = $("createForm");
+  const open = f.style.display !== "none";
+  f.style.display = open ? "none" : "block";
+  if (!open) $("inName").focus();
+};
+$("btnCancelCreate").onclick = () => { $("createForm").style.display = "none"; };
+$("btnDoCreate").onclick = async () => {
   const name = $("inName").value.trim();
   if (!validName(name)) { setStatus(spaceStatus, "El nombre del espacio: de 5 a 12 letras, sin números ni espacios.", "err"); return; }
   setStatus(spaceStatus, "Creando tu espacio…");
@@ -364,7 +377,7 @@ $("btnJoin").onclick = async () => {
   await pull(); // si el ID no existe, pull sale solo a modo local con aviso
 };
 $("inId").addEventListener("keydown", e => { if (e.key === "Enter") $("btnJoin").click(); });
-$("inName").addEventListener("keydown", e => { if (e.key === "Enter") $("inId").focus(); });
+$("inName").addEventListener("keydown", e => { if (e.key === "Enter") $("btnDoCreate").click(); });
 $("btnSync").onclick = pull;
 $("btnExit").onclick = () => exitToLocal("Saliste del espacio. Estás en modo local.", "");
 $("btnCopyId").onclick = async (e) => {
