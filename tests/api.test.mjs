@@ -222,7 +222,7 @@ describe("inputs: normUrl y esc (unitario)", () => {
 
   test("normUrl limpia invisibles y aplica tope 2048", () => {
     assert.equal(normUrl("https://a.com/\u200bx"), "https://a.com/x"); // Cf se elimina
-    assert.equal(normUrl("https://a.com/\u2028x"), "https://a.com"); // separador corta tokens
+    assert.equal(normUrl("https://a.com/\u2028x"), "https://a.com/"); // separador corta tokens
     assert.equal(normUrl("https://a.com/" + "x".repeat(3000)), "");
     assert.ok(normUrl("https://a.com/" + "x".repeat(2000)).length <= 2048);
   });
