@@ -1,11 +1,24 @@
 // Suite de auditoría ShareLinks — `node --test tests/` o `npm test`.
 // Crea espacios reales de prueba (<1KB) en el backend apuntado por BASE_URL.
-import { test, describe } from "node:test";
+import { test, describe, after } from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import vm from "node:vm";
 
-const BASE = process.env.BASE_URL || "https://sharelinks-pied.vercel.app";
+// TEST_TARGET=mock (defecto): API contra mock en memoria + estáticos locales. Cero cuota.
+// TEST_TARGET=prod: contra producción (gasta cuota, usar poco).
+const TARGET = process.env.TEST_TARGET || "mock";
+let BASE_URL = process.env.BASE_URL || "https://sharelinks-pied.vercel.app";
+let mockFetch = null;
+if (TARGET === "mock") {
+  process.env.ADMIN_SECRET = process.env.ADMIN_SECRET || "test-secret-local";
+  const harness = await import("./support/harness.js");
+  mockFetch = harness.mockFetch;
+  const { server, base } = await harness.startStatic();
+  BASE_URL = base;
+  after(() => server.close());
+}
+const BASE = BASE_URL;
 const API = `${BASE}/api/space`;
 const ID_RE = /^[A-Za-z0-9_-]{6,64}$/;
 
@@ -26,6 +39,7 @@ assert.equal(typeof applyBulkDelete, "function");
 const dc = (v) => structuredClone(v);
 
 async function req(method, path = "", body) {
+  if (mockFetch) return mockFetch("space", method, path, body);
   const r = await fetch(API + path, {
     method,
     headers: { "Content-Type": "application/json" },
@@ -251,7 +265,9 @@ describe("API /api/space", () => {
   test("DELETE → 405 y OPTIONS → CORS", async () => {
     const d = await req("DELETE", "?id=abcdef12");
     assert.equal(d.status, 405);
-    const o = await fetch(API + "?id=abcdef12", { method: "OPTIONS" });
+    const o = mockFetch
+      ? await mockFetch("space", "OPTIONS", "?id=abcdef12")
+      : await fetch(API + "?id=abcdef12", { method: "OPTIONS" }).then(async (r) => ({ status: r.status, headers: r.headers }));
     assert.equal(o.status, 200);
     assert.equal(o.headers.get("access-control-allow-origin"), "*");
   });
@@ -330,7 +346,7 @@ describe("mergeStores (unitario)", () => {
   test("parseImport sanea texto exportado o devuelve null", () => {
     assert.equal(parseImport("no json"), null);
     assert.equal(parseImport(""), null);
-    assert.equal(parseImport(null), null);
+    assert.deepEqual(dc(parseImport(null)), { links: [], tombstones: {} }); // JSON "null" → vacío válido
     const good = { id: "a", url: "https://a.com", ts: 5 };
     const r = parseImport(JSON.stringify({ links: [good, null, { id: "b", url: "javascript:x" }, { url: "https://s.com" }], tombstones: { a: 10, "??": 3 } }));
     assert.deepEqual(dc(r.links), [good]);
@@ -446,6 +462,7 @@ const describeAdmin = ADMIN ? describe : describe.skip;
 describeAdmin("admin /api/admin (requiere ADMIN_SECRET)", () => {
   const H = () => ({ "X-Admin-Secret": ADMIN });
   const admin = async (method, path, body) => {
+    if (mockFetch) return mockFetch("admin", method, path, body, H());
     const r = await fetch(`${BASE}/api/admin${path}`, {
       method,
       headers: { "Content-Type": "application/json", ...H() },
@@ -455,9 +472,14 @@ describeAdmin("admin /api/admin (requiere ADMIN_SECRET)", () => {
   };
 
   test("sin secreto o con secreto malo → 401", async () => {
-    const a = await fetch(`${BASE}/api/admin?action=list`);
+    const noAuth = async (path, headers) => {
+      if (mockFetch) return mockFetch("admin", "GET", path, undefined, headers || {});
+      const r = await fetch(`${BASE}/api/admin${path}`, { headers });
+      return { status: r.status, json: await r.json().catch(() => null) };
+    };
+    const a = await noAuth("?action=list");
     assert.equal(a.status, 401);
-    const b = await fetch(`${BASE}/api/admin?action=list`, { headers: { "X-Admin-Secret": "incorrecto" } });
+    const b = await noAuth("?action=list", { "X-Admin-Secret": "incorrecto" });
     assert.equal(b.status, 401);
   });
 

@@ -4,7 +4,8 @@
   "version": "1.0.0",
   "description": "ShareLinks — pasa links al celular sin WhatsApp",
   "scripts": {
-    "test": "node --test tests/api.test.mjs"
+    "test": "node --test tests/api.test.mjs",
+    "test:prod": "node tests/run-prod.cjs"
   },
   "dependencies": {
     "@vercel/blob": "^2.3.0"
