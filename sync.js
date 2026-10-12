@@ -43,6 +43,23 @@ function mergeStores(a, b) {
   return { links, tombstones };
 }
 
+// Borra varios ids de una: los saca de links y anota tombstones (se sincroniza).
+function applyBulkDelete(store, ids) {
+  store = normStore(store);
+  const set = new Set(ids);
+  const now = Date.now();
+  const tombstones = { ...store.tombstones };
+  const links = [];
+  for (const l of store.links) {
+    if (l && typeof l.id === "string" && set.has(l.id)) {
+      tombstones[l.id] = Math.max(tombstones[l.id] || 0, now);
+    } else if (l) {
+      links.push(l);
+    }
+  }
+  return { links, tombstones };
+}
+
 // Igualdad lógica (ignora orden) para decidir si hay que re-subir tras un pull.
 function sameStore(a, b) {
   const norm = (s) => {
@@ -85,5 +102,5 @@ function esc(s) {
 }
 
 if (typeof module !== "undefined" && module.exports) {
-  module.exports = { normStore, mergeStores, sameStore, normUrl, esc, validName, MAX_URL_LEN };
+  module.exports = { normStore, mergeStores, sameStore, applyBulkDelete, normUrl, esc, validName, MAX_URL_LEN };
 }

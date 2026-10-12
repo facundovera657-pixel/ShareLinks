@@ -59,6 +59,14 @@
   .link{background:var(--card);border:1px solid var(--line);border-radius:var(--r);padding:12px;transition:border-color .15s ease}
   .link:hover{border-color:#334052}
   .link .top{display:flex;gap:8px;align-items:center}
+  .selbox{display:none;width:20px;height:20px;accent-color:var(--acc);flex-shrink:0;cursor:pointer}
+  #list.sel .selbox{display:block}
+  .listhead{display:flex;align-items:center;gap:8px}
+  .listhead h2{flex:1}
+  #btnSel{padding:8px 12px;font-size:13px;margin-bottom:10px}
+  #selbar{margin-bottom:10px}
+  #selbar button{font-size:13px;padding:10px 8px}
+  #btnDelSel{color:var(--err);border-color:#4d2429}
   .fav{width:30px;height:30px;border-radius:9px;background:var(--card2);display:grid;place-items:center;font-size:14px;font-weight:700;color:var(--acc);flex-shrink:0}
   .meta{flex:1;min-width:0}
   .meta b{display:block;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
@@ -138,7 +146,12 @@
 
   <!-- LISTA -->
   <section class="card">
-    <h2>3 · Mis links (<span id="count">0</span>)</h2>
+    <div class="listhead"><h2>3 · Mis links (<span id="count">0</span>)</h2><button class="ghost" id="btnSel">Seleccionar</button></div>
+    <div class="row" id="selbar" style="display:none">
+      <button class="ghost" id="btnAll">Todas</button>
+      <button class="ghost" id="btnDelSel">Borrar (0)</button>
+      <button class="ghost" id="btnCancelSel">Cancelar</button>
+    </div>
     <ul id="list"></ul>
     <div class="empty" id="empty"><span class="art"><svg viewBox="0 0 24 24"><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></svg></span>Aún no hay links.<br>Pega uno arriba y pulsa Guardar.</div>
   </section>
@@ -213,6 +226,8 @@ if (new URLSearchParams(location.hash.slice(1)).get("id")) {
 let store = loadStore(spaceId || null);
 let pushT = null;
 let lastQrId = "";
+let selectMode = false;
+const selected = new Set();
 
 const $ = (id) => document.getElementById(id);
 const list = $("list"), empty = $("empty"), count = $("count");
@@ -263,6 +278,7 @@ function render() {
   list.innerHTML = sorted.map(l => `
     <li class="link" data-id="${esc(l.id)}">
       <div class="top">
+        <input type="checkbox" class="selbox" data-sel="${esc(l.id)}" ${selected.has(l.id) ? "checked" : ""} aria-label="Seleccionar link de ${esc(domainOf(l.url))}" />
         <div class="fav">${esc(domainOf(l.url).slice(0,1).toUpperCase())}</div>
         <div class="meta"><b>${esc(domainOf(l.url))}</b><span>${esc(l.url)}</span><span>${fmtDate(l.ts)}</span></div>
         <button class="del" data-act="del" title="Borrar">×</button>
@@ -313,7 +329,9 @@ function schedulePush() {
 function exitToLocal(msg, cls) {
   saveStore(spaceId, store);
   spaceId = ""; localStorage.removeItem(LS_ID);
-  store = loadStore(null); render();
+  store = loadStore(null);
+  setSelectMode(false);
+  render();
   setStatus(spaceStatus, msg, cls === undefined ? "err" : cls);
 }
 async function pull() {
@@ -329,6 +347,7 @@ async function pull() {
       name: cloud.name || store.name || "",
       created: cloud.created || store.created || 0,
     };
+    pruneSelected();
     saveStore(spaceId, store); render();
     if (changed) schedulePush(); // converge borrados y fusiones en la nube
     else setStatus(spaceStatus, "Sincronizado ✓ · " + store.links.length + " links", "ok");
@@ -392,6 +411,46 @@ $("btnCopyId").onclick = async (e) => {
   else prompt("Copia tu ID:", spaceId);
 };
 
+/* ===== Selección múltiple ===== */
+function setSelectMode(on) {
+  selectMode = on;
+  if (!on) selected.clear();
+  $("list").classList.toggle("sel", on);
+  $("selbar").style.display = on ? "flex" : "none";
+  $("btnSel").textContent = on ? "Listo" : "Seleccionar";
+  updateSelBar();
+}
+function updateSelBar() {
+  const n = selected.size;
+  $("btnDelSel").textContent = "Borrar (" + n + ")";
+  $("btnDelSel").disabled = n === 0;
+  $("btnDelSel").style.opacity = n ? "1" : ".5";
+}
+function pruneSelected() {
+  const alive = new Set(store.links.map(l => l.id));
+  for (const id of [...selected]) if (!alive.has(id)) selected.delete(id);
+}
+$("btnSel").onclick = () => setSelectMode(!selectMode);
+$("btnCancelSel").onclick = () => setSelectMode(false);
+$("btnAll").onclick = () => {
+  if (store.links.length && selected.size === store.links.length) selected.clear();
+  else store.links.forEach(l => selected.add(l.id));
+  render(); updateSelBar();
+};
+$("btnDelSel").onclick = () => {
+  if (!selected.size) return;
+  const n = selected.size;
+  store = applyBulkDelete(store, [...selected]);
+  setSelectMode(false);
+  render(); schedulePush();
+  toast(n === 1 ? "Borrado" : n + " borrados");
+};
+list.addEventListener("change", (e) => {
+  const cb = e.target.closest(".selbox"); if (!cb) return;
+  if (cb.checked) selected.add(cb.dataset.sel); else selected.delete(cb.dataset.sel);
+  updateSelBar();
+});
+
 list.onclick = async (e) => {
   const btn = e.target.closest("button"); if (!btn) return;
   const li = e.target.closest(".link"); if (!li) return;
@@ -400,6 +459,7 @@ list.onclick = async (e) => {
   if (act === "del") {
     store.links = store.links.filter(l => l.id !== item.id);
     store.tombstones[item.id] = Date.now(); // el borrado también se sincroniza
+    selected.delete(item.id);
     render(); schedulePush(); toast("Borrado");
   }
   if (act === "open") window.open(item.url, "_blank", "noopener");

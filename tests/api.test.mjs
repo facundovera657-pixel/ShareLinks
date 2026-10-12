@@ -15,12 +15,13 @@ const sandbox = {};
 vm.createContext(sandbox);
 sandbox.URL = URL; // el contexto vm no trae globales WHATWG; normUrl lo necesita
 vm.runInContext(syncSrc, sandbox);
-const { mergeStores, sameStore, normStore, normUrl, esc, validName } = sandbox;
+const { mergeStores, sameStore, normStore, normUrl, esc, validName, applyBulkDelete } = sandbox;
 assert.equal(typeof mergeStores, "function");
 assert.equal(typeof sameStore, "function");
 assert.equal(typeof normUrl, "function");
 assert.equal(typeof esc, "function");
 assert.equal(typeof validName, "function");
+assert.equal(typeof applyBulkDelete, "function");
 // structuredClone trae valores del sandbox vm al realm actual (evita choques de prototipo en deepEqual)
 const dc = (v) => structuredClone(v);
 
@@ -325,6 +326,17 @@ describe("mergeStores (unitario)", () => {
     assert.ok(sameStore({ links: [A, B], tombstones: {} }, { links: [B, A], tombstones: {} }));
     assert.ok(!sameStore({ links: [A], tombstones: {} }, { links: [A, B], tombstones: {} }));
   });
+
+  test("applyBulkDelete borra varios y anota tombstones", () => {
+    const A = { id: "a", url: "https://a.com", ts: 1 };
+    const B = { id: "b", url: "https://b.com", ts: 2 };
+    const C = { id: "c", url: "https://c.com", ts: 3 };
+    const r = applyBulkDelete({ links: [A, B, C], tombstones: {} }, ["a", "c", "zzz"]);
+    assert.deepEqual(dc(r.links), [B]);
+    assert.deepEqual(Object.keys(dc(r.tombstones)).sort(), ["a", "c"]);
+    const r2 = applyBulkDelete({ links: [], tombstones: {} }, ["a"]);
+    assert.deepEqual(dc(r2), { links: [], tombstones: {} });
+  });
 });
 
 describe("frontend y PWA", () => {
@@ -341,6 +353,10 @@ describe("frontend y PWA", () => {
     assert.match(html, /id="inName"/);
     assert.match(html, /id="createForm"/);
     assert.match(html, /id="btnDoCreate"/);
+    assert.match(html, /id="btnSel"/);
+    assert.match(html, /id="selbar"/);
+    assert.match(html, /id="btnDelSel"/);
+    assert.match(html, /selbox/);
     assert.match(html, /5 a 12 letras/);
     assert.match(html, /autocapitalize="off"/);
     assert.match(html, /enterkeyhint="go"/);
