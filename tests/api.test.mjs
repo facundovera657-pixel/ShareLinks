@@ -385,6 +385,8 @@ describe("frontend y PWA", () => {
     assert.match(html, /id="btnExport"/);
     assert.match(html, /id="btnImport"/);
     assert.match(html, /id="impBox"/);
+    assert.match(html, /id="secAdd"[^>]*style="display:none"/);
+    assert.match(html, /id="secList"[^>]*style="display:none"/);
     assert.match(html, /selbox/);
     assert.match(html, /5 a 12 letras/);
     assert.match(html, /autocapitalize="off"/);
