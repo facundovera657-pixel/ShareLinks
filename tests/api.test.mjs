@@ -130,6 +130,14 @@ describe("frontend y PWA", () => {
     assert.match(html, /name="theme-color"/);
     assert.match(html, /navigator\.serviceWorker\.register\("\/sw\.js"\)/);
     assert.match(html, /navigator\.share/);
+    assert.match(html, /src="\/vendor\/qrcode\.min\.js"/);
+    assert.doesNotMatch(html, /qrserver/);
+  });
+
+  test("vendor qrcode servido y genera QR", async () => {
+    const r = await fetch(BASE + "/vendor/qrcode.min.js");
+    assert.equal(r.status, 200);
+    assert.ok((await r.text()).length > 10000);
   });
 
   test("headers de seguridad presentes", async () => {
