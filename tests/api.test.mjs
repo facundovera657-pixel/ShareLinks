@@ -70,7 +70,7 @@ describe("API /api/space", () => {
 
   test("POST con links iniciales los persiste", async () => {
     const links = [mkLink(1)];
-    const { json: c } = await req("POST", "", { links });
+    const { json: c } = await req("POST", "", mkSpace(links));
     const g = await req("GET", `?id=${c.id}`);
     assert.deepEqual(g.json.links, links);
   });
