@@ -3,6 +3,9 @@
   "private": true,
   "version": "1.0.0",
   "description": "ShareLinks — pasa links al celular sin WhatsApp",
+  "scripts": {
+    "test": "node --test tests/"
+  },
   "dependencies": {
     "@vercel/blob": "^2.3.0"
   }

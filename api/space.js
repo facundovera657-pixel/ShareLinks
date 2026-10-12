@@ -8,17 +8,42 @@ const validId = (id) => typeof id === "string" && /^[A-Za-z0-9_-]{6,64}$/.test(i
 const pathOf = (id) => `spaces/${id}.json`;
 const newId = () => crypto.randomBytes(6).toString("base64url"); // 8 caracteres
 
-async function readLinks(id) {
-  try {
-    const res = await get(pathOf(id), { access: "private", useCache: false });
-    if (!res || res.statusCode !== 200 || !res.stream) return null;
-    const data = JSON.parse(await new Response(res.stream).text());
-    return Array.isArray(data) ? data : data.links || null;
-  } catch (e) {
-    if (e && (e.name === "BlobNotFoundError" || e.code === "BlobNotFoundError")) return null;
-    // get() también puede devolver null en vez de lanzar
-    return null;
+// Sanea links entrantes: solo items con id/url válidos, tope de cantidad y largo.
+const MAX_LINKS = 1000;
+const MAX_URL = 2048;
+function cleanLinks(v) {
+  if (!Array.isArray(v)) return null;
+  const out = [];
+  for (const it of v) {
+    if (out.length >= MAX_LINKS) break;
+    if (!it || typeof it !== "object") continue;
+    const id = typeof it.id === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(it.id) ? it.id : null;
+    let url = typeof it.url === "string" ? it.url.trim().slice(0, MAX_URL) : "";
+    if (url && !/^https?:\/\//i.test(url)) url = "";
+    try { new URL(url); } catch { url = ""; }
+    if (!id || !url) continue;
+    out.push({ id, url, ts: Number.isFinite(it.ts) ? it.ts : Date.now() });
   }
+  return out;
+}
+
+function isNotFound(e) {
+  return !!e && (e.name === "BlobNotFoundError" || e.code === "BlobNotFoundError" || e.statusCode === 404);
+}
+
+// { status: "ok", links } | { status: "missing" } ; lanza ante errores reales
+async function readLinks(id) {
+  let res = null;
+  try {
+    res = await get(pathOf(id), { access: "private", useCache: false });
+  } catch (e) {
+    if (isNotFound(e)) return { status: "missing" };
+    throw e;
+  }
+  if (!res || res.statusCode !== 200 || !res.stream) return { status: "missing" };
+  const data = JSON.parse(await new Response(res.stream).text());
+  const links = Array.isArray(data) ? data : data.links;
+  return { status: "ok", links: Array.isArray(links) ? links : [] };
 }
 
 module.exports = async function handler(req, res) {
@@ -30,7 +55,7 @@ module.exports = async function handler(req, res) {
   try {
     // Crear espacio
     if (req.method === "POST") {
-      const links = Array.isArray(req.body && req.body.links) ? req.body.links : [];
+      const links = cleanLinks(req.body && req.body.links) || [];
       const id = newId();
       await put(pathOf(id), JSON.stringify({ links }), {
         access: "private",
@@ -45,17 +70,17 @@ module.exports = async function handler(req, res) {
 
     // Leer espacio
     if (req.method === "GET") {
-      const links = await readLinks(id);
-      if (links === null) return res.status(404).json({ error: "Ese ID no existe" });
-      return res.status(200).json({ links });
+      const found = await readLinks(id);
+      if (found.status === "missing") return res.status(404).json({ error: "Ese ID no existe" });
+      return res.status(200).json({ links: found.links });
     }
 
     // Guardar espacio
     if (req.method === "PUT") {
-      const links = req.body && req.body.links;
-      if (!Array.isArray(links)) return res.status(400).json({ error: "links inválido" });
-      const existing = await readLinks(id);
-      if (existing === null) return res.status(404).json({ error: "Ese ID no existe" });
+      const links = cleanLinks(req.body && req.body.links);
+      if (!links) return res.status(400).json({ error: "links inválido" });
+      const found = await readLinks(id);
+      if (found.status === "missing") return res.status(404).json({ error: "Ese ID no existe" });
       await put(pathOf(id), JSON.stringify({ links }), {
         access: "private",
         contentType: "application/json",
