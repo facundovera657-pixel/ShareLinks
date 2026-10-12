@@ -13,6 +13,7 @@ const ID_RE = /^[A-Za-z0-9_-]{6,64}$/;
 const syncSrc = readFileSync(new URL("../sync.js", import.meta.url), "utf8");
 const sandbox = {};
 vm.createContext(sandbox);
+sandbox.URL = URL; // el contexto vm no trae globales WHATWG; normUrl lo necesita
 vm.runInContext(syncSrc, sandbox);
 const { mergeStores, sameStore, normStore, normUrl, esc } = sandbox;
 assert.equal(typeof mergeStores, "function");
