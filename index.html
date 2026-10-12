@@ -93,7 +93,7 @@
     <h2>1 · Tu espacio (ID)</h2>
     <div id="noSpace">
       <label for="inId">Entrar con un ID existente</label>
-      <input id="inId" placeholder="Ej: a3f9c2…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" maxlength="64" />
+      <input id="inId" placeholder="Ej: a3f9c2…" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="go" maxlength="64" />
       <div class="row2" style="margin-top:10px">
         <button class="ghost" id="btnJoin">Entrar</button>
         <button class="btn" id="btnCreate">Crear mi espacio</button>
@@ -119,7 +119,7 @@
   <section class="card">
     <h2>2 · Guardar link</h2>
     <label for="inUrl">Pega el link</label>
-    <input id="inUrl" placeholder="https://…" inputmode="url" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" />
+    <input id="inUrl" placeholder="https://…" inputmode="url" autocomplete="off" autocapitalize="off" autocorrect="off" spellcheck="false" enterkeyhint="send" />
     <div class="row"><button class="btn" id="btnAdd">＋ Guardar</button></div>
     <div class="status" id="addStatus"></div>
   </section>
@@ -203,12 +203,6 @@ function toast(msg) {
   clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove("show"), 2200);
 }
 function setStatus(el, msg, cls) { el.textContent = msg || ""; el.className = "status" + (cls ? " " + cls : ""); }
-function esc(s) { return String(s).replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
-function normUrl(u) {
-  u = (u || "").trim(); if (!u) return "";
-  if (!/^https?:\/\//i.test(u)) u = "https://" + u;
-  try { new URL(u); return u; } catch { return ""; }
-}
 function domainOf(u) { try { return new URL(u).hostname.replace(/^www\./, ""); } catch { return u; } }
 function fmtDate(ts) { try { return new Date(ts).toLocaleString("es", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }); } catch { return ""; } }
 
@@ -313,12 +307,13 @@ $("btnCreate").onclick = async () => {
   } catch (e) { setStatus(spaceStatus, "Sin conexión: " + e.message + ". Sigues en modo local.", "err"); }
 };
 $("btnJoin").onclick = async () => {
-  const id = $("inId").value.replace(/\s+/g, ""); // el teclado del celu agrega espacios/mayúsculas
+  const id = $("inId").value.replace(/[\p{Cf}\s]+/gu, ""); // invisibles y espacios del teclado móvil
   if (!id) { setStatus(spaceStatus, "Escribe tu ID primero.", "err"); return; }
   spaceId = id; localStorage.setItem(LS_ID, id);
   store = loadStore(id); render();
   await pull(); // si el ID no existe, pull sale solo a modo local con aviso
 };
+$("inId").addEventListener("keydown", e => { if (e.key === "Enter") $("btnJoin").click(); });
 $("btnSync").onclick = pull;
 $("btnExit").onclick = () => exitToLocal("Saliste del espacio. Estás en modo local.", "");
 $("btnCopyId").onclick = async () => {

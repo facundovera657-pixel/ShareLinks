@@ -54,3 +54,26 @@ function sameStore(a, b) {
   };
   return norm(a) === norm(b);
 }
+
+// Tope compartido cliente/servidor para URLs.
+var MAX_URL_LEN = 2048;
+
+// Normaliza input de URL: primer token (pega multilínea), sin invisibles,
+// con esquema https:// por defecto y tope de largo. "" = inválida.
+function normUrl(u) {
+  u = String(u == null ? "" : u).replace(/[\p{Cf}]/gu, "").trim().split(/\s/, 1)[0] || "";
+  if (!u) return "";
+  if (!/^https?:\/\//i.test(u)) u = "https://" + u;
+  if (u.length > MAX_URL_LEN) return "";
+  try {
+    new URL(u);
+    return u;
+  } catch {
+    return "";
+  }
+}
+
+// Escape HTML para todo dato que se inserta en el DOM.
+function esc(s) {
+  return String(s).replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}

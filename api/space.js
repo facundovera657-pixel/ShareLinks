@@ -21,7 +21,9 @@ function cleanLinks(v) {
     if (out.length >= MAX_LINKS) break;
     if (!it || typeof it !== "object") continue;
     const id = typeof it.id === "string" && /^[A-Za-z0-9_-]{1,64}$/.test(it.id) ? it.id : null;
-    let url = typeof it.url === "string" ? it.url.trim().slice(0, MAX_URL) : "";
+    // primer token (pega multilínea), sin invisibles, tope de largo
+    let url = typeof it.url === "string" ? it.url.replace(/[\p{Cf}]/gu, "").trim().split(/\s/, 1)[0] || "" : "";
+    url = url.slice(0, MAX_URL);
     if (url && !/^https?:\/\//i.test(url)) url = "";
     try { new URL(url); } catch { url = ""; }
     if (!id || !url) continue;

@@ -14,9 +14,11 @@ const syncSrc = readFileSync(new URL("../sync.js", import.meta.url), "utf8");
 const sandbox = {};
 vm.createContext(sandbox);
 vm.runInContext(syncSrc, sandbox);
-const { mergeStores, sameStore, normStore } = sandbox;
+const { mergeStores, sameStore, normStore, normUrl, esc } = sandbox;
 assert.equal(typeof mergeStores, "function");
 assert.equal(typeof sameStore, "function");
+assert.equal(typeof normUrl, "function");
+assert.equal(typeof esc, "function");
 // structuredClone trae valores del sandbox vm al realm actual (evita choques de prototipo en deepEqual)
 const dc = (v) => structuredClone(v);
 
@@ -170,6 +172,64 @@ describe("API /api/space", () => {
     const merged = mergeStores({ links: [B], tombstones: {} }, cloud);
     assert.deepEqual(dc(merged.links.map((l) => l.id)).sort(), [A.id, B.id].sort());
   });
+
+  test("servidor normaliza URL multilínea al primer token", async () => {
+    const { json: c } = await req("POST", "", { links: [] });
+    await req("PUT", `?id=${c.id}`, { links: [{ id: "n", url: "https://a.com\nhttps://evil.com", ts: 1 }] });
+    const g = await req("GET", `?id=${c.id}`);
+    assert.deepEqual(g.json.links, [{ id: "n", url: "https://a.com", ts: 1 }]);
+  });
+
+  test("servidor trunca URL gigante a 2048", async () => {
+    const { json: c } = await req("POST", "", { links: [] });
+    await req("PUT", `?id=${c.id}`, { links: [{ id: "big", url: "https://a.com/" + "x".repeat(100000), ts: 1 }] });
+    const g = await req("GET", `?id=${c.id}`);
+    assert.equal(g.json.links.length, 1);
+    assert.ok(g.json.links[0].url.length <= 2048);
+  });
+
+  test("DELETE → 405 y OPTIONS → CORS", async () => {
+    const d = await req("DELETE", "?id=abcdef12");
+    assert.equal(d.status, 405);
+    const o = await fetch(API + "?id=abcdef12", { method: "OPTIONS" });
+    assert.equal(o.status, 200);
+    assert.equal(o.headers.get("access-control-allow-origin"), "*");
+  });
+});
+
+describe("inputs: normUrl y esc (unitario)", () => {
+  test("normUrl acepta y normaliza", () => {
+    assert.equal(normUrl("https://ejemplo.com/a"), "https://ejemplo.com/a");
+    assert.equal(normUrl("ejemplo.com"), "https://ejemplo.com");
+    assert.equal(normUrl("  https://ejemplo.com  "), "https://ejemplo.com");
+    assert.equal(normUrl("HTTP://EJEMPLO.COM"), "HTTP://EJEMPLO.COM");
+  });
+
+  test("normUrl rechaza esquemas peligrosos y basura", () => {
+    for (const u of ["", "   ", "javascript:alert(1)", "JaVaScRiPt:alert(1)", "data:text/html,x",
+                     "vbscript:msgbox(1)", "file:///etc/passwd", "ftp://a.com"]) {
+      assert.equal(normUrl(u), "", `esperaba "" para ${JSON.stringify(u)}`);
+    }
+    // "notaurl" sola sí es válida (se asume https://notaurl)
+    assert.equal(normUrl("notaurl"), "https://notaurl");
+  });
+
+  test("normUrl toma el primer token ante pega multilínea", () => {
+    assert.equal(normUrl("https://a.com\nhttps://evil.com"), "https://a.com");
+    assert.equal(normUrl("https://a.com https://b.com"), "https://a.com");
+  });
+
+  test("normUrl limpia invisibles y aplica tope 2048", () => {
+    assert.equal(normUrl("https://a.com /x"), "https://a.com/x");
+    assert.equal(normUrl("https://a.com/" + "x".repeat(3000)), "");
+    assert.ok(normUrl("https://a.com/" + "x".repeat(2000)).length <= 2048);
+  });
+
+  test("esc neutraliza HTML", () => {
+    assert.equal(esc('<script>alert(1)</script>'), "&lt;script&gt;alert(1)&lt;/script&gt;");
+    assert.equal(esc('"onmouseover="x'), "&quot;onmouseover=&quot;x");
+    assert.equal(esc("a'b&c"), "a&#39;b&amp;c");
+  });
 });
 
 describe("mergeStores (unitario)", () => {
@@ -196,14 +256,6 @@ describe("mergeStores (unitario)", () => {
     assert.ok(sameStore({ links: [A, B], tombstones: {} }, { links: [B, A], tombstones: {} }));
     assert.ok(!sameStore({ links: [A], tombstones: {} }, { links: [A, B], tombstones: {} }));
   });
-
-  test("DELETE → 405 y OPTIONS → CORS", async () => {
-    const d = await req("DELETE", "?id=abcdef12");
-    assert.equal(d.status, 405);
-    const o = await fetch(API + "?id=abcdef12", { method: "OPTIONS" });
-    assert.equal(o.status, 200);
-    assert.equal(o.headers.get("access-control-allow-origin"), "*");
-  });
 });
 
 describe("frontend y PWA", () => {
@@ -218,6 +270,9 @@ describe("frontend y PWA", () => {
     assert.match(html, /src="\/vendor\/qrcode\.min\.js"/);
     assert.match(html, /src="\/sync\.js"/);
     assert.match(html, /autocapitalize="off"/);
+    assert.match(html, /enterkeyhint="go"/);
+    assert.match(html, /enterkeyhint="send"/);
+    assert.equal((html.match(/addEventListener\("keydown"/g) || []).length, 2); // Enter en ID y en URL
     assert.doesNotMatch(html, /qrserver/);
   });
 
