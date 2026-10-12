@@ -177,7 +177,10 @@ const API = "/api/space";
 const NOT_FOUND_RE = /no existe/i;
 async function cloudCreate(store) {
   const r = await fetch(API, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(store) });
-  if (!r.ok) throw new Error("No se pudo crear (HTTP " + r.status + ")");
+  if (!r.ok) {
+    const d = await r.json().catch(() => ({}));
+    throw new Error((d && d.error) || ("No se pudo crear (HTTP " + r.status + ")"));
+  }
   const d = await r.json().catch(() => ({}));
   if (!d.id) throw new Error("Respuesta sin ID");
   return d.id;
@@ -367,7 +370,11 @@ $("btnDoCreate").onclick = async () => {
     saveStore(id, store); render();
     setStatus(spaceStatus, "Espacio creado ✓. Usa este ID en tu celular.", "ok");
     toast("Espacio creado ✓");
-  } catch (e) { setStatus(spaceStatus, "Sin conexión: " + e.message + ". Sigues en modo local.", "err"); }
+  } catch (e) {
+    const m = (e && e.message) || "Error desconocido";
+    if (/en uso|inválido/i.test(m)) setStatus(spaceStatus, m, "err");
+    else setStatus(spaceStatus, "Sin conexión: " + m + ". Sigues en modo local.", "err");
+  }
 };
 $("btnJoin").onclick = async () => {
   const id = $("inId").value.replace(/[\p{Cf}\s]+/gu, ""); // invisibles y espacios del teclado móvil

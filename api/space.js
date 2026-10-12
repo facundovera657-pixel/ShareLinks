@@ -2,7 +2,7 @@
 // API propia de ShareLinks — guarda los links de cada espacio (ID) en Vercel Blob.
 // Sin cuentas: quien conoce el ID puede leer/escribir ese espacio.
 const crypto = require("crypto");
-const { put, get } = require("@vercel/blob");
+const { put, get, del } = require("@vercel/blob");
 const { validName } = require("../sync.js");
 
 const validId = (id) => typeof id === "string" && /^[A-Za-z0-9_-]{6,64}$/.test(id);
@@ -35,6 +35,62 @@ function cleanLinks(v) {
 
 function isNotFound(e) {
   return !!e && (e.name === "BlobNotFoundError" || e.code === "BlobNotFoundError" || e.statusCode === 404);
+}
+function isPrecond(e) {
+  return !!e && (e.name === "BlobPreconditionFailedError" || e.code === "BlobPreconditionFailedError" || e.statusCode === 412);
+}
+
+// Registro global nombre → id (minúsculas) para unicidad. Escritura condicional anti-carreras.
+const REG_PATH = "registry/names.json";
+async function readRegistry() {
+  try {
+    const res = await get(REG_PATH, { access: "private", useCache: false });
+    if (!res || res.statusCode !== 200 || !res.stream) return { names: {}, etag: null };
+    const etag = res.blob && res.blob.etag ? res.blob.etag : null;
+    let data = null;
+    try {
+      data = JSON.parse(await new Response(res.stream).text());
+    } catch {
+      data = null;
+    }
+    return {
+      names: data && typeof data === "object" && !Array.isArray(data) ? data : {},
+      etag,
+    };
+  } catch (e) {
+    if (isNotFound(e)) return { names: {}, etag: null };
+    throw e;
+  }
+}
+
+// Reserva el nombre para id. true = reservado, false = en uso. Lanza ante errores reales.
+async function claimName(name, id) {
+  const key = name.toLowerCase();
+  for (let attempt = 0; attempt < 4; attempt++) {
+    const reg = await readRegistry();
+    if (reg.names[key] && reg.names[key] !== id) return false;
+    const names = { ...reg.names, [key]: id };
+    try {
+      await put(REG_PATH, JSON.stringify(names), {
+        access: "private",
+        contentType: "application/json",
+        addRandomSuffix: false,
+        allowOverwrite: true,
+        ...(reg.etag ? { ifMatch: reg.etag } : {}),
+      });
+      if (!reg.etag) {
+        // bootstrap sin etag: verificar que no nos pisó una carrera
+        const check = await readRegistry();
+        if (check.names[key] === id) return true;
+        continue;
+      }
+      return true;
+    } catch (e) {
+      if (isPrecond(e)) continue; // otro escribió a la vez: releer y reintentar
+      throw e;
+    }
+  }
+  return false;
 }
 
 // Sanea tombstones {linkId: ts}: claves válidas, ts numéricos, tope y poda >30 días.
@@ -112,6 +168,17 @@ module.exports = async function handler(req, res) {
         contentType: "application/json",
         addRandomSuffix: false,
       });
+      let claimed = false;
+      try {
+        claimed = await claimName(name, id);
+      } catch (e) {
+        try { await del(pathOf(id)); } catch {}
+        throw e;
+      }
+      if (!claimed) {
+        try { await del(pathOf(id)); } catch {}
+        return res.status(400).json({ error: "Ese nombre ya está en uso. Elegí otro." });
+      }
       return res.status(200).json({ id });
     }
 

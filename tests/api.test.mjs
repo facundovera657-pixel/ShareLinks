@@ -35,8 +35,11 @@ async function req(method, path = "", body) {
   return { status: r.status, json, headers: r.headers };
 }
 const mkLink = (i) => ({ id: `t${Date.now().toString(36)}${i}`, url: `https://ejemplo.com/p${i}`, ts: Date.now() });
-const TNAME = "Pruebas";
-const mkSpace = (links) => ({ links, name: TNAME });
+// nombres únicos por corrida (letras, ≤12): el registro persiste entre corridas
+const STAMP = Date.now().toString(36).replace(/[0-9]/g, (d) => "abcdefghij"[+d]);
+let seqN = 0;
+const UName = (prefix) => (prefix + STAMP.slice(-4) + String.fromCharCode(65 + (seqN % 26)) + String.fromCharCode(65 + (((seqN++ / 26) | 0) % 26))).slice(0, 12);
+const mkSpace = (links) => ({ links, name: UName("Test") });
 
 describe("API /api/space", () => {
   test("POST crea espacio y devuelve ID válido", async () => {
@@ -145,22 +148,36 @@ describe("API /api/space", () => {
       assert.equal(status, 400, `esperaba 400 para ${JSON.stringify(name)}`);
       assert.ok(json.error);
     }
-    for (const name of ["abcde", "Pruebas", "DoceLetrasXX", "Ñandú", "München"]) {
+    for (const name of [UName("Cinco"), UName("Pruebas"), UName("Doce"), UName("Ñandú"), UName("Münch")]) {
       const { status, json } = await req("POST", "", { links: [], name });
       assert.equal(status, 200, `esperaba 200 para ${name}`);
       assert.match(json.id, ID_RE);
     }
   });
 
+  test("nombre duplicado (incluso con otra capitalización) → 400", async () => {
+    const name = UName("Dupli");
+    const first = await req("POST", "", { links: [], name });
+    assert.equal(first.status, 200);
+    for (const dup of [name, name.toLowerCase(), name.toUpperCase()]) {
+      const r = await req("POST", "", { links: [], name: dup });
+      assert.equal(r.status, 400, `esperaba 400 para duplicado ${dup}`);
+      assert.match(r.json.error, /en uso/);
+    }
+    const other = await req("POST", "", { links: [], name: UName("Otro") });
+    assert.equal(other.status, 200);
+  });
+
   test("GET devuelve nombre y fecha; PUT no los cambia", async () => {
-    const { json: c } = await req("POST", "", mkSpace([mkLink(1)]));
+    const body = mkSpace([mkLink(1)]);
+    const { json: c } = await req("POST", "", body);
     const g = await req("GET", `?id=${c.id}`);
-    assert.equal(g.json.name, TNAME);
+    assert.equal(g.json.name, body.name);
     assert.ok(Number.isFinite(g.json.created) && g.json.created > 0);
     const p = await req("PUT", `?id=${c.id}`, { links: [], tombstones: {}, name: "OtroNombre", created: 1 });
     assert.equal(p.status, 200);
     const g2 = await req("GET", `?id=${c.id}`);
-    assert.equal(g2.json.name, TNAME);
+    assert.equal(g2.json.name, body.name);
     assert.equal(g2.json.created, g.json.created);
   });
 
