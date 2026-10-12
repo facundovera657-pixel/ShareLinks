@@ -74,11 +74,18 @@ describe("API /api/space", () => {
     assert.equal(status, 404);
   });
 
-  test("GET sin id y con ids maliciosos → 400", async () => {
-    for (const q of ["", "?id=", "?id=../etc", "?id=<script>", "?id=a".padEnd(100, "a"),
-                     "?id=__proto__", "?id=a b", "?id=áéí"]) {
+  test("GET sin id y con ids malformados → 400", async () => {
+    for (const q of ["", "?id=", "?id=../etc", "?id=<script>", "?id=a".padEnd(100, "a"), "?id=a b", "?id=áéí"]) {
       const { status } = await req("GET", q);
       assert.equal(status, 400, `esperaba 400 para ${q}`);
+    }
+  });
+
+  test("GET con formato válido pero inexistente (incl. __proto__) → 404 sin efectos", async () => {
+    for (const q of ["?id=noexiste123abc", "?id=__proto__", "?id=abcdef12"]) {
+      const { status, json } = await req("GET", q);
+      assert.equal(status, 404, `esperaba 404 para ${q}`);
+      assert.ok(json.error);
     }
   });
 
