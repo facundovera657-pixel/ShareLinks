@@ -5,9 +5,16 @@
   "description": "ShareLinks",
   "scripts": {
     "test": "node --test tests/api.test.mjs",
-    "test:prod": "node tests/run-prod.cjs"
+    "test:prod": "node tests/run-prod.cjs",
+    "test:e2e": "playwright test",
+    "test:e2e:headed": "playwright test --headed",
+    "test:e2e:shots": "node tests/e2e/screenshots.cjs",
+    "test:all": "npm test && npm run test:e2e"
   },
   "dependencies": {
     "@vercel/blob": "^2.3.0"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.64.1"
   }
 }

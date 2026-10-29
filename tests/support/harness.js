@@ -77,4 +77,80 @@ function startStatic() {
   });
 }
 
-module.exports = { mockFetch, startStatic };
+// Servidor completo para E2E: estáticos + /api/space y /api/admin reales
+// (con el mock de Blob en memoria). Permite que un navegador real ejercite
+// los flujos de punta a punta sin tocar Vercel.
+function startServer({ port = 4321, host = "127.0.0.1" } = {}) {
+  function readBody(rq) {
+    return new Promise((resolve) => {
+      let raw = "";
+      rq.on("data", (c) => { raw += c; if (raw.length > 2e6) rq.destroy(); });
+      rq.on("end", () => {
+        try { resolve(raw ? JSON.parse(raw) : undefined); } catch { resolve(undefined); }
+      });
+    });
+  }
+
+  function sendJson(rs, status, obj, headers) {
+    const out = obj === undefined ? "" : JSON.stringify(obj);
+    rs.writeHead(status, {
+      "Content-Type": "application/json; charset=utf-8",
+      "Content-Length": Buffer.byteLength(out),
+      ...(headers || {}),
+    });
+    rs.end(out);
+  }
+
+  return new Promise((resolve, reject) => {
+    const srv = http.createServer(async (rq, rs) => {
+      try {
+        const u = new URL(rq.url, "http://x");
+        const p = decodeURIComponent(u.pathname);
+
+        if (p === "/health") { rs.writeHead(200); rs.end("ok"); return; }
+
+        if (p === "/api/space" || p === "/api/admin") {
+          const query = {};
+          for (const k of new Set([...u.searchParams.keys()])) {
+            const all = u.searchParams.getAll(k);
+            query[k] = all.length > 1 ? all : all[0];
+          }
+          const body = await readBody(rq);
+          let statusCode = 200;
+          const headersOut = {};
+          let payload;
+          const res = {
+            setHeader: (k, v) => { headersOut[String(k).toLowerCase()] = v; return res; },
+            status: (c) => { statusCode = c; return res; },
+            json: (o) => { payload = o; return res; },
+            end: () => res,
+          };
+          const handler = p === "/api/admin" ? adminHandler : spaceHandler;
+          await handler({ method: rq.method, query, body, headers: rq.headers }, res);
+          sendJson(rs, statusCode, payload, headersOut);
+          return;
+        }
+
+        let filePath = p.endsWith("/") ? p + "index.html" : p;
+        if (filePath === "/admin") filePath = "/admin.html";
+        const file = path.normalize(path.join(ROOT, filePath));
+        if (!file.startsWith(ROOT) || !fs.existsSync(file) || fs.statSync(file).isDirectory()) {
+          rs.writeHead(404); rs.end(); return;
+        }
+        rs.writeHead(200, {
+          "Content-Type": MIME[path.extname(file)] || "application/octet-stream",
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "DENY",
+          "Referrer-Policy": "strict-origin-when-cross-origin",
+        });
+        fs.createReadStream(file).pipe(rs);
+      } catch {
+        try { sendJson(rs, 500, { error: "Error interno" }); } catch { rs.writeHead(500); rs.end(); }
+      }
+    });
+    srv.on("error", reject);
+    srv.listen(port, host, () => resolve({ server: srv, base: `http://${host}:${port}` }));
+  });
+}
+
+module.exports = { mockFetch, startStatic, startServer };
